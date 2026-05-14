@@ -1,6 +1,7 @@
 import type {
   GraphPayload,
   GraphRelationshipRecord,
+  GraphSearchSuggestion,
   SchemaPayload,
 } from "@/lib/graph-types"
 
@@ -90,6 +91,49 @@ export function getCategoryColor(label: string) {
   return categoryColors[label] ?? "#8acfd2"
 }
 
+export function searchSampleGraph(search: string): GraphPayload {
+  const trimmedSearch = search.trim().toLowerCase()
+
+  if (!trimmedSearch) {
+    return sampleGraph
+  }
+
+  const nodes = sampleGraph.nodes.filter((graphNode) =>
+    nodeMatchesSearch(graphNode, trimmedSearch)
+  )
+  const nodeIds = new Set(nodes.map((graphNode) => graphNode.id))
+
+  return {
+    nodes,
+    relationships: sampleGraph.relationships.filter(
+      (relationship) =>
+        nodeIds.has(relationship.source) && nodeIds.has(relationship.target)
+    ),
+  }
+}
+
+export function suggestSampleGraph(
+  search: string,
+  limit = 8
+): GraphSearchSuggestion[] {
+  const trimmedSearch = search.trim().toLowerCase()
+
+  if (!trimmedSearch) {
+    return []
+  }
+
+  return sampleGraph.nodes
+    .filter((graphNode) => nodeMatchesSearch(graphNode, trimmedSearch))
+    .map((graphNode) => ({
+      id: graphNode.id,
+      caption: graphNode.caption,
+      labels: graphNode.labels,
+      detail: graphNode.labels.join(", "),
+      searchValue: graphNode.caption,
+    }))
+    .slice(0, limit)
+}
+
 function node(
   id: string,
   labels: string[],
@@ -110,6 +154,19 @@ function node(
     size,
     color: getCategoryColor(primaryLabel),
   }
+}
+
+function nodeMatchesSearch(
+  graphNode: GraphPayload["nodes"][number],
+  search: string
+) {
+  const searchableValues = [
+    graphNode.caption,
+    ...graphNode.labels,
+    ...Object.values(graphNode.properties).map((value) => String(value)),
+  ]
+
+  return searchableValues.some((value) => value.toLowerCase().includes(search))
 }
 
 function rel(

@@ -19,11 +19,20 @@ import {
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
+import { Tabs, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
 import { Textarea } from "@workspace/ui/components/textarea"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
 import {
   BadgeInfo,
   ChevronDown,
+  ChevronRight,
   CircleDot,
+  Copy,
   Database,
   Eye,
   EyeOff,
@@ -52,17 +61,22 @@ import {
   type GraphSelection,
   ReagraphWorkspace,
 } from "@/components/reagraph-workspace"
-import { StylingPanel } from "@/components/styling-panel"
+import {
+  LabelStylingEditor,
+  RuleStylingPanel,
+} from "@/components/styling-panel"
 import { authClient } from "@/lib/auth-client"
 import {
   expandLocalGraph,
   readLocalSchema,
   runLocalReadQuery,
   searchLocalGraph,
+  suggestLocalGraph,
 } from "@/lib/browser-neo4j"
 import { validateReadOnlyMatchQuery } from "@/lib/cypher"
 import type {
   GraphPayload,
+  GraphSearchSuggestion,
   QueryResultPayload,
   SchemaPayload,
 } from "@/lib/graph-types"
@@ -78,7 +92,12 @@ import {
   listQueryHistory,
   type QueryHistoryEntry,
 } from "@/lib/query-history"
-import { sampleGraph, sampleSchema } from "@/lib/sample-graph"
+import {
+  sampleGraph,
+  sampleSchema,
+  searchSampleGraph,
+  suggestSampleGraph,
+} from "@/lib/sample-graph"
 
 type AdminConnection = {
   id: string
@@ -99,6 +118,45 @@ type SampleConnection = {
 }
 
 type ConnectionOption = AdminConnection | LocalConnection | SampleConnection
+
+type StatusDetails = {
+  message: string
+  debug: Record<string, unknown>
+}
+
+type ApiErrorPayload = {
+  error?: string
+  details?: unknown
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function getClientErrorDetails(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+    }
+  }
+
+  return {
+    name: typeof error,
+    message: String(error),
+  }
+}
+
+function getApiErrorPayload(payload: unknown): ApiErrorPayload {
+  if (!isRecord(payload)) {
+    return {}
+  }
+
+  return {
+    error: typeof payload.error === "string" ? payload.error : undefined,
+    details: payload.details,
+  }
+}
 
 type AppAccess = {
   mode: "authenticated" | "no-auth-local"
@@ -124,6 +182,11 @@ const sampleConnection: SampleConnection = {
 
 const defaultQuery = "MATCH (n)-[r]-(m)\nRETURN n, r, m\nLIMIT 50"
 
+const emptyGraph: GraphPayload = {
+  nodes: [],
+  relationships: [],
+}
+
 export function GraphExplorerApp({
   initialConnections,
   access,
@@ -142,9 +205,17 @@ export function GraphExplorerApp({
   const [selection, setSelection] = React.useState<GraphSelection>(null)
   const [graphMode, setGraphMode] = React.useState<"2d" | "3d">("2d")
   const [searchTerm, setSearchTerm] = React.useState("")
+  const [searchSuggestions, setSearchSuggestions] = React.useState<
+    GraphSearchSuggestion[]
+  >([])
+  const [isSearchSuggesting, setIsSearchSuggesting] = React.useState(false)
+  const [canvasVersion, setCanvasVersion] = React.useState(0)
   const [hiddenCategories, setHiddenCategories] = React.useState<string[]>([])
   const [status, setStatus] = React.useState("Ready")
-  const [showConnectionForm, setShowConnectionForm] = React.useState(false)
+  const [statusDetails, setStatusDetails] =
+    React.useState<StatusDetails | null>(null)
+  const [showConnectionManager, setShowConnectionManager] =
+    React.useState(false)
   const [query, setQuery] = React.useState(defaultQuery)
   const [paramsText, setParamsText] = React.useState("{}")
   const [queryResult, setQueryResult] =
@@ -199,8 +270,10 @@ export function GraphExplorerApp({
 
   const loadGraph = React.useCallback(
     async (connection: ConnectionOption, search: string) => {
+      setStatusDetails(null)
+
       if (connection.source === "sample") {
-        setGraph(sampleGraph)
+        setGraph(searchSampleGraph(search))
         setStatus("Loaded sample graph")
         return
       }
@@ -210,11 +283,29 @@ export function GraphExplorerApp({
 
         try {
           const result = await searchLocalGraph(connection, search, 120)
-          setGraph(result.graph.nodes.length > 0 ? result.graph : sampleGraph)
+          setGraph(result.graph)
           setStatus("Local graph loaded")
-        } catch {
-          setGraph(sampleGraph)
-          setStatus("Local browser connection failed; showing sample graph")
+        } catch (error) {
+          setGraph(emptyGraph)
+          setStatus("Local browser connection failed")
+          setStatusDetails({
+            message: "Local browser connection failed",
+            debug: {
+              operation: "searchLocalGraph",
+              source: "local",
+              connection: {
+                id: connection.id,
+                name: connection.name,
+                host: connection.host,
+                scheme: connection.scheme,
+                username: connection.username,
+              },
+              search,
+              limit: 120,
+              timestamp: new Date().toISOString(),
+              error: getClientErrorDetails(error),
+            },
+          })
         }
         return
       }
@@ -234,15 +325,184 @@ export function GraphExplorerApp({
           }),
         })
 
+        if (!response.ok) {
+          const payload = getApiErrorPayload(
+            await response.json().catch(() => null)
+          )
+          const message =
+            payload.error ?? `Graph search failed (${response.status})`
+
+          setGraph(emptyGraph)
+          setStatus(message)
+          setStatusDetails({
+            message,
+            debug: {
+              operation: "fetchGraphSearch",
+              source: "admin",
+              http: {
+                status: response.status,
+                statusText: response.statusText,
+              },
+              connection: {
+                id: connection.id,
+                name: connection.name,
+                host: connection.host,
+                scheme: connection.scheme,
+                username: connection.username,
+              },
+              search,
+              limit: 120,
+              timestamp: new Date().toISOString(),
+              api: payload.details,
+            },
+          })
+          return
+        }
+
         setGraph(await response.json())
         setStatus("Graph loaded")
-      } catch {
-        setGraph(sampleGraph)
-        setStatus("Graph request failed; showing sample graph")
+        setStatusDetails(null)
+      } catch (error) {
+        setGraph(emptyGraph)
+        setStatus("Graph request failed")
+        setStatusDetails({
+          message: "Graph request failed",
+          debug: {
+            operation: "fetchGraphSearch",
+            source: "admin",
+            connection: {
+              id: connection.id,
+              name: connection.name,
+              host: connection.host,
+              scheme: connection.scheme,
+              username: connection.username,
+            },
+            search,
+            limit: 120,
+            timestamp: new Date().toISOString(),
+            error: getClientErrorDetails(error),
+          },
+        })
       }
     },
     []
   )
+
+  React.useEffect(() => {
+    const trimmedSearch = searchTerm.trim()
+
+    if (trimmedSearch.length < 2) {
+      setSearchSuggestions([])
+      setIsSearchSuggesting(false)
+      return
+    }
+
+    if (selectedConnection.source === "sample") {
+      setSearchSuggestions(suggestSampleGraph(trimmedSearch))
+      setIsSearchSuggesting(false)
+      return
+    }
+
+    let cancelled = false
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => {
+      setIsSearchSuggesting(true)
+
+      if (selectedConnection.source === "local") {
+        suggestLocalGraph(selectedConnection, trimmedSearch)
+          .then((suggestions) => {
+            if (!cancelled) {
+              setSearchSuggestions(suggestions)
+            }
+          })
+          .catch(() => {
+            if (!cancelled) {
+              setSearchSuggestions([])
+            }
+          })
+          .finally(() => {
+            if (!cancelled) {
+              setIsSearchSuggesting(false)
+            }
+          })
+        return
+      }
+
+      fetch("/api/explore/suggest", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          connectionId: selectedConnection.id,
+          search: trimmedSearch,
+          limit: 8,
+        }),
+        signal: controller.signal,
+      })
+        .then((response) =>
+          response.ok
+            ? (response.json() as Promise<GraphSearchSuggestion[]>)
+            : []
+        )
+        .then((suggestions) => {
+          if (!cancelled) {
+            setSearchSuggestions(suggestions)
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setSearchSuggestions([])
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setIsSearchSuggesting(false)
+          }
+        })
+    }, 180)
+
+    return () => {
+      cancelled = true
+      controller.abort()
+      window.clearTimeout(timeout)
+    }
+  }, [searchTerm, selectedConnection])
+
+  const schemaSearchSuggestions = React.useMemo<GraphSearchSuggestion[]>(() => {
+    const trimmedSearch = searchTerm.trim().toLowerCase()
+
+    if (trimmedSearch.length < 2) {
+      return []
+    }
+
+    return schema.labels
+      .filter((label) => label.name.toLowerCase().includes(trimmedSearch))
+      .map((label) => ({
+        id: `label:${label.name}`,
+        caption: label.name,
+        labels: [label.name],
+        detail: `Label - ${label.count} nodes`,
+        searchValue: label.name,
+      }))
+  }, [schema.labels, searchTerm])
+
+  const visibleSearchSuggestions = React.useMemo(() => {
+    const seenSearchValues = new Set<string>()
+
+    return [...schemaSearchSuggestions, ...searchSuggestions].filter(
+      (suggestion) => {
+        const key = suggestion.searchValue.toLowerCase()
+
+        if (seenSearchValues.has(key)) {
+          return false
+        }
+
+        seenSearchValues.add(key)
+        return true
+      }
+    )
+  }, [schemaSearchSuggestions, searchSuggestions])
 
   React.useEffect(() => {
     setSelection(null)
@@ -416,6 +676,17 @@ export function GraphExplorerApp({
     )
   }
 
+  async function deleteConnection(id: string) {
+    await deleteLocalConnection(id)
+    setLocalConnections((currentConnections) =>
+      currentConnections.filter((connection) => connection.id !== id)
+    )
+
+    if (selectedConnectionId === id) {
+      setSelectedConnectionId(initialConnections[0]?.id ?? sampleConnection.id)
+    }
+  }
+
   return (
     <main className="flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
       <TopBar
@@ -423,17 +694,8 @@ export function GraphExplorerApp({
         connections={connections}
         selectedConnection={selectedConnection}
         onConnectionChange={setSelectedConnectionId}
-        onAddConnection={() => setShowConnectionForm(true)}
-        onManageConnections={() => setShowConnectionForm(true)}
-        onDeleteConnection={async (id) => {
-          await deleteLocalConnection(id)
-          setLocalConnections((currentConnections) =>
-            currentConnections.filter((connection) => connection.id !== id)
-          )
-          setSelectedConnectionId(
-            initialConnections[0]?.id ?? sampleConnection.id
-          )
-        }}
+        onAddConnection={() => setShowConnectionManager(true)}
+        onManageConnections={() => setShowConnectionManager(true)}
         activeTab={activeTab}
         onTabChange={setActiveTab}
       />
@@ -451,18 +713,30 @@ export function GraphExplorerApp({
             styling={styling}
             onStylingChange={setStyling}
             onToggleCategory={toggleCategory}
+            searchSuggestions={visibleSearchSuggestions}
+            isSearchSuggesting={isSearchSuggesting}
             onSearch={() => loadGraph(selectedConnection, searchTerm)}
+            onSearchSuggestionSelect={(suggestion) => {
+              setSearchTerm(suggestion.searchValue)
+              void loadGraph(selectedConnection, suggestion.searchValue)
+            }}
             onExpand={expandSelected}
             onReset={() => {
-              setGraph(sampleGraph)
+              setGraph(emptyGraph)
               setSelection(null)
-              setStatus("Graph reset")
+              setSearchTerm("")
+              setSearchSuggestions([])
+              setHiddenCategories([])
+              setStatusDetails(null)
+              setCanvasVersion((version) => version + 1)
+              setStatus("Canvas cleared")
             }}
           />
           <section className="min-h-0 border-x border-border max-lg:h-[58vh]">
             <ReagraphWorkspace
               graph={graph}
               mode={graphMode}
+              canvasKey={canvasVersion}
               hiddenCategories={hiddenCategories}
               styling={styling}
               selected={selection}
@@ -475,6 +749,7 @@ export function GraphExplorerApp({
             selected={selection}
             connection={selectedConnection}
             status={status}
+            statusDetails={statusDetails}
           />
         </section>
       ) : (
@@ -496,16 +771,19 @@ export function GraphExplorerApp({
         />
       )}
 
-      {showConnectionForm ? (
-        <ConnectionDialog
-          onClose={() => setShowConnectionForm(false)}
+      {showConnectionManager ? (
+        <ConnectionManagerDialog
+          connections={connections}
+          selectedConnectionId={selectedConnection.id}
+          onClose={() => setShowConnectionManager(false)}
+          onDelete={deleteConnection}
+          onSelect={setSelectedConnectionId}
           onSaved={(connection) => {
             setLocalConnections((currentConnections) => [
               ...currentConnections,
               connection,
             ])
             setSelectedConnectionId(connection.id)
-            setShowConnectionForm(false)
           }}
         />
       ) : null}
@@ -522,7 +800,6 @@ function TopBar({
   onConnectionChange,
   onAddConnection,
   onManageConnections,
-  onDeleteConnection,
 }: {
   access: AppAccess
   connections: ConnectionOption[]
@@ -532,7 +809,6 @@ function TopBar({
   onConnectionChange: (id: string) => void
   onAddConnection: () => void
   onManageConnections: () => void
-  onDeleteConnection: (id: string) => Promise<void>
 }) {
   const { resolvedTheme, setTheme } = useTheme()
 
@@ -586,26 +862,22 @@ function TopBar({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <Button
-          className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-xs hover:bg-accent"
-          onClick={onManageConnections}
-          type="button"
-          variant="outline"
-        >
-          <Settings className="size-3.5" />
-          Manage Connections
-        </Button>
-        {selectedConnection.source === "local" ? (
-          <Button
-            className="inline-flex size-8 items-center justify-center rounded-md border border-destructive/30 text-destructive hover:bg-destructive/10"
-            onClick={() => void onDeleteConnection(selectedConnection.id)}
-            title="Delete local connection"
-            type="button"
-            variant="outline"
-          >
-            <Trash2 className="size-3.5" />
-          </Button>
-        ) : null}
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Manage connections"
+                className="inline-flex size-8 items-center justify-center rounded-md border border-border hover:bg-accent"
+                onClick={onManageConnections}
+                type="button"
+                variant="outline"
+              >
+                <Settings className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent sideOffset={6}>manage connections</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
       <div className="flex items-center gap-2">
@@ -681,7 +953,10 @@ function ExploreLeftPanel({
   onGraphModeChange,
   onSearchTermChange,
   onToggleCategory,
+  searchSuggestions,
+  isSearchSuggesting,
   onSearch,
+  onSearchSuggestionSelect,
   onExpand,
   onReset,
 }: {
@@ -695,13 +970,65 @@ function ExploreLeftPanel({
   onGraphModeChange: (mode: "2d" | "3d") => void
   onSearchTermChange: (value: string) => void
   onToggleCategory: (category: string) => void
+  searchSuggestions: GraphSearchSuggestion[]
+  isSearchSuggesting: boolean
   onSearch: () => void
+  onSearchSuggestionSelect: (suggestion: GraphSearchSuggestion) => void
   onExpand: () => void
   onReset: () => void
 }) {
+  const [openCategory, setOpenCategory] = React.useState<string | null>(null)
+  const [ruleStylingOpen, setRuleStylingOpen] = React.useState(false)
+  const [suggestionsOpen, setSuggestionsOpen] = React.useState(false)
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = React.useState(-1)
+  const showSuggestions =
+    suggestionsOpen &&
+    searchTerm.trim().length >= 2 &&
+    (isSearchSuggesting || searchSuggestions.length > 0)
+
+  React.useEffect(() => {
+    const categoryNames = new Set(schema.labels.map((label) => label.name))
+    if (openCategory && !categoryNames.has(openCategory)) {
+      setOpenCategory(null)
+    }
+  }, [openCategory, schema.labels])
+
+  React.useEffect(() => {
+    setActiveSuggestionIndex(searchSuggestions.length > 0 ? 0 : -1)
+  }, [searchSuggestions])
+
+  const updateLabelStyle = (
+    label: string,
+    next: Partial<NonNullable<StylingState["labelStyles"][string]>>
+  ) => {
+    const currentStyle = styling.labelStyles[label] ?? { text: [] }
+    onStylingChange({
+      ...styling,
+      labelStyles: {
+        ...styling.labelStyles,
+        [label]: { ...currentStyle, ...next },
+      },
+    })
+  }
+
+  const resetLabelStyle = (label: string) => {
+    const { [label]: _removed, ...labelStyles } = styling.labelStyles
+    onStylingChange({ ...styling, labelStyles })
+  }
+
+  const runSearch = () => {
+    setSuggestionsOpen(false)
+    onSearch()
+  }
+
+  const selectSuggestion = (suggestion: GraphSearchSuggestion) => {
+    setSuggestionsOpen(false)
+    onSearchSuggestionSelect(suggestion)
+  }
+
   return (
     <aside className="flex min-h-0 flex-col gap-4 overflow-y-auto bg-card p-4">
-      <div>
+      <div className="relative">
         <label
           className="flex h-10 items-center gap-2 rounded-md border border-border bg-background px-3"
           htmlFor="explore-search"
@@ -713,37 +1040,107 @@ function ExploreLeftPanel({
             placeholder="Search nodes"
             value={searchTerm}
             onChange={(event) => onSearchTermChange(event.target.value)}
+            onFocus={() => setSuggestionsOpen(true)}
+            onBlur={() => {
+              window.setTimeout(() => setSuggestionsOpen(false), 100)
+            }}
             onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setSuggestionsOpen(false)
+                return
+              }
+
+              if (showSuggestions && searchSuggestions.length > 0) {
+                if (event.key === "ArrowDown") {
+                  event.preventDefault()
+                  setActiveSuggestionIndex((index) =>
+                    Math.min(index + 1, searchSuggestions.length - 1)
+                  )
+                  return
+                }
+
+                if (event.key === "ArrowUp") {
+                  event.preventDefault()
+                  setActiveSuggestionIndex((index) => Math.max(index - 1, 0))
+                  return
+                }
+              }
+
               if (event.key === "Enter") {
-                onSearch()
+                if (
+                  showSuggestions &&
+                  activeSuggestionIndex >= 0 &&
+                  searchSuggestions[activeSuggestionIndex]
+                ) {
+                  event.preventDefault()
+                  selectSuggestion(searchSuggestions[activeSuggestionIndex])
+                  return
+                }
+
+                runSearch()
               }
             }}
           />
         </label>
+        {showSuggestions ? (
+          <div className="absolute top-11 right-0 left-0 z-20 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg">
+            {isSearchSuggesting && searchSuggestions.length === 0 ? (
+              <div className="px-3 py-2 text-xs text-muted-foreground">
+                Searching
+              </div>
+            ) : (
+              <div className="max-h-64 overflow-y-auto p-1">
+                {searchSuggestions.map((suggestion, index) => (
+                  <button
+                    className={`flex w-full items-center gap-3 rounded px-2 py-2 text-left hover:bg-accent hover:text-accent-foreground ${
+                      activeSuggestionIndex === index
+                        ? "bg-accent text-accent-foreground"
+                        : ""
+                    }`}
+                    key={suggestion.id}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onMouseEnter={() => setActiveSuggestionIndex(index)}
+                    onClick={() => selectSuggestion(suggestion)}
+                    type="button"
+                  >
+                    <span className="flex size-6 shrink-0 items-center justify-center rounded border border-border bg-background text-[10px] font-semibold">
+                      {suggestion.labels[0]?.slice(0, 1) ?? "N"}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm">
+                        {suggestion.caption}
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {suggestion.detail}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
       </div>
 
       <PanelSection icon={<Settings2 className="size-4" />} title="Graph">
-        <div className="grid grid-cols-2 gap-2">
-          {(["2d", "3d"] as const).map((mode) => (
-            <Button
-              className={`h-8 rounded-md border text-sm ${
-                graphMode === mode
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-border text-muted-foreground hover:bg-accent"
-              }`}
-              key={mode}
-              onClick={() => onGraphModeChange(mode)}
-              type="button"
-              variant="outline"
-            >
-              {mode.toUpperCase()}
-            </Button>
-          ))}
-        </div>
+        <Tabs
+          className="w-full"
+          value={graphMode}
+          onValueChange={(value) => onGraphModeChange(value as "2d" | "3d")}
+        >
+          <TabsList className="grid h-9 w-full grid-cols-2">
+            <TabsTrigger className="text-sm" value="2d">
+              2D
+            </TabsTrigger>
+            <TabsTrigger className="text-sm" value="3d">
+              3D
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
         <div className="grid grid-cols-2 gap-2">
           <Button
             className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-border text-xs hover:bg-accent"
-            onClick={onSearch}
+            onClick={runSearch}
             type="button"
             variant="outline"
           >
@@ -770,46 +1167,126 @@ function ExploreLeftPanel({
         </Button>
       </PanelSection>
 
-      <PanelSection icon={<Palette className="size-4" />} title="Styling">
-        <StylingPanel
-          styling={styling}
-          schema={schema}
-          graph={graph}
-          onChange={onStylingChange}
-        />
-      </PanelSection>
-
       <PanelSection icon={<ListFilter className="size-4" />} title="Categories">
         <div className="space-y-2">
           {schema.labels.map((label) => {
             const hidden = hiddenCategories.includes(label.name)
+            const expanded = openCategory === label.name
+            const labelStyle = styling.labelStyles[label.name] ?? { text: [] }
+            const displayColor = labelStyle.color ?? label.color
 
             return (
-              <Button
-                className="flex w-full items-center gap-3 rounded-md border border-border bg-background px-3 py-2 text-left hover:bg-accent"
+              <div
+                className="overflow-hidden rounded-md border border-border bg-background"
                 key={label.name}
-                onClick={() => onToggleCategory(label.name)}
-                type="button"
-                variant="outline"
               >
-                <span
-                  className="size-4 rounded-full"
-                  style={{ backgroundColor: label.color }}
-                />
-                <span className="min-w-0 flex-1 truncate text-sm">
-                  {label.name}
-                </span>
-                <span className="text-xs font-semibold text-foreground">
-                  {label.count}
-                </span>
-                {hidden ? (
-                  <EyeOff className="size-3.5 text-muted-foreground" />
-                ) : (
-                  <Eye className="size-3.5 text-primary" />
+                <div className="flex items-center">
+                  <button
+                    aria-expanded={expanded}
+                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left hover:bg-accent"
+                    onClick={() =>
+                      setOpenCategory(expanded ? null : label.name)
+                    }
+                    type="button"
+                  >
+                    {expanded ? (
+                      <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+                    ) : (
+                      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                    )}
+                    <span
+                      className="size-4 shrink-0 rounded-full"
+                      style={{ backgroundColor: displayColor }}
+                    />
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                      {label.name}
+                    </span>
+                    <span className="text-xs font-semibold text-foreground">
+                      {label.count}
+                    </span>
+                  </button>
+                  <Button
+                    aria-label={
+                      hidden ? `Show ${label.name}` : `Hide ${label.name}`
+                    }
+                    className="mr-2 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+                    onClick={() => onToggleCategory(label.name)}
+                    type="button"
+                    variant="ghost"
+                  >
+                    {hidden ? (
+                      <EyeOff className="size-3.5" />
+                    ) : (
+                      <Eye className="size-3.5 text-primary" />
+                    )}
+                  </Button>
+                </div>
+                {expanded && (
+                  <div className="border-t border-border p-3">
+                    <LabelStylingEditor
+                      label={label.name}
+                      labelStyle={labelStyle}
+                      baseColor={label.color}
+                      graph={graph}
+                      onChange={(next) => updateLabelStyle(label.name, next)}
+                    />
+                    {styling.labelStyles[label.name] ? (
+                      <Button
+                        className="mt-3 h-7 w-full rounded-md border border-border text-xs text-muted-foreground hover:bg-accent"
+                        onClick={() => resetLabelStyle(label.name)}
+                        type="button"
+                        variant="outline"
+                      >
+                        Reset {label.name} styling
+                      </Button>
+                    ) : null}
+                  </div>
                 )}
-              </Button>
+              </div>
             )
           })}
+          <div className="overflow-hidden rounded-md border border-border bg-background">
+            <button
+              aria-expanded={ruleStylingOpen}
+              className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-accent"
+              onClick={() => setRuleStylingOpen((open) => !open)}
+              type="button"
+            >
+              {ruleStylingOpen ? (
+                <ChevronDown className="size-3.5 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="size-3.5 text-muted-foreground" />
+              )}
+              <Palette className="size-4 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                Rule-based styling
+              </span>
+              <span className="text-xs font-semibold text-foreground">
+                {styling.rules.length}
+              </span>
+            </button>
+            {ruleStylingOpen ? (
+              <div className="border-t border-border p-3">
+                <RuleStylingPanel
+                  styling={styling}
+                  graph={graph}
+                  onChange={onStylingChange}
+                  framed={false}
+                />
+              </div>
+            ) : null}
+          </div>
+          {(Object.keys(styling.labelStyles).length > 0 ||
+            styling.rules.length > 0) && (
+            <Button
+              className="h-8 w-full rounded-md border border-border text-xs text-muted-foreground hover:bg-accent"
+              onClick={() => onStylingChange(emptyStyling)}
+              type="button"
+              variant="outline"
+            >
+              Reset all styling
+            </Button>
+          )}
         </div>
       </PanelSection>
     </aside>
@@ -821,11 +1298,13 @@ function DetailsPanel({
   selected,
   connection,
   status,
+  statusDetails,
 }: {
   graph: GraphPayload
   selected: GraphSelection
   connection: ConnectionOption
   status: string
+  statusDetails: StatusDetails | null
 }) {
   const node =
     selected?.type === "node"
@@ -887,10 +1366,79 @@ function DetailsPanel({
         <dl className="grid grid-cols-2 gap-2 text-sm">
           <Metric label="Nodes" value={graph.nodes.length} />
           <Metric label="Edges" value={graph.relationships.length} />
-          <Metric label="Status" value={status} wide />
+          <StatusMetric details={statusDetails} status={status} />
         </dl>
       </PanelSection>
     </aside>
+  )
+}
+
+function StatusMetric({
+  status,
+  details,
+}: {
+  status: string
+  details: StatusDetails | null
+}) {
+  const [copyStatus, setCopyStatus] = React.useState<
+    "idle" | "copied" | "failed"
+  >("idle")
+  const copyText = React.useMemo(
+    () =>
+      details
+        ? JSON.stringify(
+            {
+              status,
+              message: details.message,
+              debug: details.debug,
+            },
+            null,
+            2
+          )
+        : "",
+    [details, status]
+  )
+
+  async function copyDebugInfo() {
+    if (!copyText) {
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(copyText)
+      setCopyStatus("copied")
+    } catch {
+      setCopyStatus("failed")
+    }
+
+    window.setTimeout(() => setCopyStatus("idle"), 1600)
+  }
+
+  return (
+    <div className="col-span-2 rounded-md border border-border bg-background p-3">
+      <dt className="text-xs text-muted-foreground">Status</dt>
+      <dd className="mt-1 break-words text-sm text-foreground">{status}</dd>
+      {details ? (
+        <div className="mt-3 space-y-2">
+          <pre className="max-h-48 overflow-auto rounded-md border border-border bg-card p-2 text-xs leading-5 text-muted-foreground">
+            {copyText}
+          </pre>
+          <Button
+            className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md border border-border text-xs hover:bg-accent"
+            onClick={() => void copyDebugInfo()}
+            type="button"
+            variant="outline"
+          >
+            <Copy className="size-3.5" />
+            {copyStatus === "copied"
+              ? "Copied"
+              : copyStatus === "failed"
+                ? "Copy failed"
+                : "Copy debug info"}
+          </Button>
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -1046,11 +1594,19 @@ function ResultTable({ result }: { result: QueryResultPayload | null }) {
   )
 }
 
-function ConnectionDialog({
+function ConnectionManagerDialog({
+  connections,
+  selectedConnectionId,
   onClose,
+  onDelete,
+  onSelect,
   onSaved,
 }: {
+  connections: ConnectionOption[]
+  selectedConnectionId: string
   onClose: () => void
+  onDelete: (id: string) => Promise<void>
+  onSelect: (id: string) => void
   onSaved: (connection: LocalConnection) => void
 }) {
   const [form, setForm] = React.useState({
@@ -1060,75 +1616,184 @@ function ConnectionDialog({
     password: "",
   })
   const [error, setError] = React.useState<string | null>(null)
+  const [deletingId, setDeletingId] = React.useState<string | null>(null)
 
   async function save() {
+    setError(null)
+
     try {
       const connection = await saveLocalConnection(form)
       onSaved(connection)
+      setForm({
+        name: "",
+        connectionUrl: "",
+        username: "",
+        password: "",
+      })
     } catch {
       setError("Enter a valid Neo4j URL and connection details.")
     }
   }
 
+  async function removeConnection(id: string) {
+    setDeletingId(id)
+
+    try {
+      await onDelete(id)
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   return (
     <Dialog open onOpenChange={(open) => (!open ? onClose() : undefined)}>
-      <DialogContent className="border border-border bg-card text-foreground">
+      <DialogContent className="max-h-[calc(100svh-2rem)] w-[min(calc(100vw-2rem),48rem)] !max-w-none overflow-y-auto border border-border bg-card text-foreground">
         <DialogHeader>
-          <DialogTitle>Add local connection</DialogTitle>
+          <DialogTitle>Manage connections</DialogTitle>
           <DialogDescription>
-            Passwords are encrypted in this browser and are not sent to the app
-            server.
+            Select an active connection, remove browser-local connections, or
+            add a new local Neo4j database.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
-          {(
-            [
-              ["name", "Name"],
-              ["connectionUrl", "neo4j+s://..."],
-              ["username", "Username"],
-              ["password", "Password"],
-            ] as const
-          ).map(([key, label]) => (
-            <label className="block" htmlFor={`local-${key}`} key={key}>
-              <span className="mb-1 block text-xs text-muted-foreground">
-                {label}
-              </span>
-              <Input
-                className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary"
-                id={`local-${key}`}
-                type={key === "password" ? "password" : "text"}
-                value={form[key]}
-                onChange={(event) =>
-                  setForm((currentForm) => ({
-                    ...currentForm,
-                    [key]: event.target.value,
-                  }))
-                }
-              />
-            </label>
-          ))}
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        <div className="grid gap-5 lg:grid-cols-[minmax(280px,1fr)_320px]">
+          <section className="min-w-0 space-y-3">
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Connections
+            </div>
+            <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+              {connections.map((connection) => {
+                const selected = connection.id === selectedConnectionId
+                const canDelete = connection.source === "local"
+
+                return (
+                  <div
+                    className={`flex min-w-0 items-center gap-3 rounded-md border p-3 ${
+                      selected
+                        ? "border-primary bg-primary/10"
+                        : "border-border bg-background"
+                    }`}
+                    key={connection.id}
+                  >
+                    <Database
+                      className={`size-4 shrink-0 ${
+                        selected ? "text-primary" : "text-muted-foreground"
+                      }`}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-sm font-medium">
+                          {connection.name}
+                        </span>
+                        <span className="shrink-0 rounded-sm border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                          {getConnectionSourceLabel(connection)}
+                        </span>
+                      </div>
+                      <div className="mt-1 truncate text-xs text-muted-foreground">
+                        {connection.scheme} - {connection.host} -{" "}
+                        {connection.username}
+                      </div>
+                    </div>
+                    {selected ? (
+                      <span className="shrink-0 text-xs font-medium text-primary">
+                        Active
+                      </span>
+                    ) : (
+                      <Button
+                        className="h-8 rounded-md border border-border px-3 text-xs hover:bg-accent"
+                        onClick={() => onSelect(connection.id)}
+                        type="button"
+                        variant="outline"
+                      >
+                        Use
+                      </Button>
+                    )}
+                    {canDelete ? (
+                      <Button
+                        aria-label={`Delete ${connection.name}`}
+                        className="inline-flex size-8 shrink-0 items-center justify-center rounded-md border border-destructive/30 text-destructive hover:bg-destructive/10"
+                        disabled={deletingId === connection.id}
+                        onClick={() => void removeConnection(connection.id)}
+                        type="button"
+                        variant="outline"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    ) : null}
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Add local
+            </div>
+            {(
+              [
+                ["name", "Name"],
+                ["connectionUrl", "neo4j+s://..."],
+                ["username", "Username"],
+                ["password", "Password"],
+              ] as const
+            ).map(([key, label]) => (
+              <label className="block" htmlFor={`local-${key}`} key={key}>
+                <span className="mb-1 block text-xs text-muted-foreground">
+                  {label}
+                </span>
+                <Input
+                  className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary"
+                  id={`local-${key}`}
+                  type={key === "password" ? "password" : "text"}
+                  value={form[key]}
+                  onChange={(event) =>
+                    setForm((currentForm) => ({
+                      ...currentForm,
+                      [key]: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+            ))}
+            <p className="text-xs leading-5 text-muted-foreground">
+              Passwords are encrypted in this browser and are not sent to the
+              app server.
+            </p>
+            {error ? <p className="text-sm text-destructive">{error}</p> : null}
+            <Button
+              className="h-8 w-full rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              onClick={() => void save()}
+              type="button"
+            >
+              Save locally
+            </Button>
+          </section>
         </div>
-        <DialogFooter className="mt-1 flex-row justify-between">
+        <DialogFooter className="mt-1">
           <Button
             className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-3 text-sm hover:bg-accent"
             onClick={onClose}
             type="button"
             variant="outline"
           >
-            Cancel
-          </Button>
-          <Button
-            className="h-8 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-            onClick={() => void save()}
-            type="button"
-          >
-            Save locally
+            Close manager
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   )
+}
+
+function getConnectionSourceLabel(connection: ConnectionOption) {
+  if (connection.source === "admin") {
+    return "Admin"
+  }
+
+  if (connection.source === "local") {
+    return "Local"
+  }
+
+  return "Sample"
 }
 
 function PanelSection({

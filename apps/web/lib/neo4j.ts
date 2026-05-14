@@ -9,6 +9,7 @@ import type {
   GraphNodeRecord,
   GraphPayload,
   GraphRelationshipRecord,
+  GraphSearchSuggestion,
   QueryResultPayload,
   SchemaPayload,
 } from "@/lib/graph-types"
@@ -82,7 +83,7 @@ function serializeProperties(properties: Record<string, unknown>) {
 }
 
 function getCaption(properties: Record<string, unknown>, fallback: string) {
-  const fields = ["name", "title", "label", "id"]
+  const fields = ["nameEn", "name", "title", "label", "_aid", "id"]
 
   for (const field of fields) {
     const value = properties[field]
@@ -270,9 +271,69 @@ export async function searchGraph(
 
   return runReadQuery(
     connection,
-    "MATCH (n) WHERE any(key IN keys(n) WHERE toLower(toString(n[key])) CONTAINS $search) RETURN n LIMIT $limit",
+    `MATCH (n)
+WHERE any(label IN labels(n) WHERE toLower(label) CONTAINS $search)
+  OR any(key IN keys(n) WHERE toLower(toString(n[key])) CONTAINS $search)
+RETURN n
+LIMIT $limit`,
     { search: trimmedSearch, limit: neo4j.int(limit) }
   )
+}
+
+export async function suggestGraph(
+  connection: AdminConnection,
+  search: string,
+  limit = 8
+): Promise<GraphSearchSuggestion[]> {
+  const trimmedSearch = search.trim().toLowerCase()
+
+  if (!trimmedSearch) {
+    return []
+  }
+
+  const result = await runReadQuery(
+    connection,
+    `MATCH (n)
+WHERE any(label IN labels(n) WHERE toLower(label) CONTAINS $search)
+  OR any(key IN keys(n) WHERE toLower(toString(n[key])) CONTAINS $search)
+WITH n, coalesce(
+  toString(n.nameEn),
+  toString(n.name),
+  toString(n.title),
+  toString(n.label),
+  toString(n._aid),
+  toString(n.id),
+  elementId(n)
+) AS caption
+RETURN elementId(n) AS id,
+  labels(n) AS labels,
+  caption,
+  [] AS matchedKeys
+ORDER BY caption
+LIMIT $limit`,
+    { search: trimmedSearch, limit: neo4j.int(limit) }
+  )
+
+  return result.rows.map((row) => {
+    const labels = Array.isArray(row.labels)
+      ? row.labels.map((label) => String(label))
+      : []
+    const matchedKeys = Array.isArray(row.matchedKeys)
+      ? row.matchedKeys.map((key) => String(key))
+      : []
+    const caption = String(row.caption ?? row.id)
+
+    return {
+      id: String(row.id),
+      caption,
+      labels,
+      detail:
+        matchedKeys.length > 0
+          ? `Matched ${matchedKeys.join(", ")}`
+          : labels.join(", "),
+      searchValue: caption,
+    }
+  })
 }
 
 export async function expandGraph(

@@ -138,45 +138,14 @@ export function StylingPanel({
   )
 }
 
-function ModeTab({
-  active,
-  onClick,
+export function LabelStylingEditor({
   label,
-  icon,
-}: {
-  active: boolean
-  onClick: () => void
-  label: string
-  icon?: React.ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex items-center gap-1 border-b-2 pb-1 text-sm transition-colors ${
-        active
-          ? "border-primary text-primary"
-          : "border-transparent text-muted-foreground hover:text-foreground"
-      }`}
-    >
-      {label}
-      {icon}
-    </button>
-  )
-}
-
-function DefaultMode({
-  labels,
-  selectedLabel,
-  onSelectLabel,
   labelStyle,
   baseColor,
   graph,
   onChange,
 }: {
-  labels: string[]
-  selectedLabel: string
-  onSelectLabel: (label: string) => void
+  label: string
   labelStyle: LabelStyle
   baseColor: string
   graph: GraphPayload
@@ -186,30 +155,8 @@ function DefaultMode({
     "color" | "size" | "text" | "icon"
   >("color")
 
-  if (labels.length === 0) {
-    return (
-      <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
-        No node categories available yet.
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-3">
-      <div className="space-y-1">
-        <div className="text-xs text-muted-foreground">Editing category</div>
-        <NativeSelect
-          value={selectedLabel}
-          onChange={(event) => onSelectLabel(event.target.value)}
-        >
-          {labels.map((label) => (
-            <NativeSelectOption key={label} value={label}>
-              {label}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </div>
-
       <div className="flex gap-3 border-b border-border">
         {(["color", "size", "text", "icon"] as const).map((tab) => (
           <button
@@ -257,7 +204,7 @@ function DefaultMode({
 
       {subTab === "text" && (
         <TextEditor
-          label={selectedLabel}
+          label={label}
           labelStyle={labelStyle}
           graph={graph}
           onChange={onChange}
@@ -270,6 +217,126 @@ function DefaultMode({
           onChange={(icon) => onChange({ icon })}
         />
       )}
+    </div>
+  )
+}
+
+export function RuleStylingPanel({
+  styling,
+  graph,
+  onChange,
+  framed = true,
+}: {
+  styling: StylingState
+  graph: GraphPayload
+  onChange: (next: StylingState) => void
+  framed?: boolean
+}) {
+  const content = (
+    <>
+      <RuleMode
+        rules={styling.rules}
+        graph={graph}
+        onChange={(rules) => onChange({ ...styling, rules })}
+      />
+      {styling.rules.length > 0 && (
+        <Button
+          className="h-7 w-full rounded-md border border-border text-xs text-muted-foreground hover:bg-accent"
+          onClick={() => onChange({ ...styling, rules: [] })}
+          type="button"
+          variant="outline"
+        >
+          Reset rule styling
+        </Button>
+      )}
+    </>
+  )
+
+  if (!framed) {
+    return <div className="space-y-3">{content}</div>
+  }
+
+  return (
+    <div className="space-y-3 rounded-md border border-border bg-background p-3">
+      {content}
+    </div>
+  )
+}
+
+function ModeTab({
+  active,
+  onClick,
+  label,
+  icon,
+}: {
+  active: boolean
+  onClick: () => void
+  label: string
+  icon?: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex items-center gap-1 border-b-2 pb-1 text-sm transition-colors ${
+        active
+          ? "border-primary text-primary"
+          : "border-transparent text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {label}
+      {icon}
+    </button>
+  )
+}
+
+function DefaultMode({
+  labels,
+  selectedLabel,
+  onSelectLabel,
+  labelStyle,
+  baseColor,
+  graph,
+  onChange,
+}: {
+  labels: string[]
+  selectedLabel: string
+  onSelectLabel: (label: string) => void
+  labelStyle: LabelStyle
+  baseColor: string
+  graph: GraphPayload
+  onChange: (next: Partial<LabelStyle>) => void
+}) {
+  if (labels.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
+        No node categories available yet.
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1">
+        <div className="text-xs text-muted-foreground">Editing category</div>
+        <NativeSelect
+          value={selectedLabel}
+          onChange={(event) => onSelectLabel(event.target.value)}
+        >
+          {labels.map((label) => (
+            <NativeSelectOption key={label} value={label}>
+              {label}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      <LabelStylingEditor
+        label={selectedLabel}
+        labelStyle={labelStyle}
+        baseColor={baseColor}
+        graph={graph}
+        onChange={onChange}
+      />
     </div>
   )
 }

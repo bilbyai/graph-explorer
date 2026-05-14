@@ -20,6 +20,14 @@ export type GraphPayload = {
   relationships: GraphRelationshipRecord[]
 }
 
+export type GraphSearchSuggestion = {
+  id: string
+  caption: string
+  labels: string[]
+  detail: string
+  searchValue: string
+}
+
 export type QueryResultPayload = {
   columns: string[]
   rows: Record<string, unknown>[]

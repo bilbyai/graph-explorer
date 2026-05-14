@@ -14,6 +14,9 @@ import {
   type InternalGraphNode,
   type LayoutTypes,
   lightTheme,
+  type NodeRendererProps,
+  Sphere,
+  SphereWithIcon,
 } from "reagraph"
 
 import type { GraphPayload } from "@/lib/graph-types"
@@ -46,6 +49,7 @@ export type GraphSelection =
 type ReagraphWorkspaceProps = {
   graph: GraphPayload
   mode: "2d" | "3d"
+  canvasKey?: string | number
   hiddenCategories: string[]
   styling?: StylingState
   selected: GraphSelection
@@ -56,6 +60,7 @@ type ReagraphWorkspaceProps = {
 export function ReagraphWorkspace({
   graph,
   mode,
+  canvasKey,
   hiddenCategories,
   styling = emptyStyling,
   selected,
@@ -137,10 +142,12 @@ export function ReagraphWorkspace({
   const selections = selected ? [selected.id] : []
   const layoutType: LayoutTypes =
     mode === "3d" ? "forceDirected3d" : "forceDirected2d"
+  const cameraMode = mode === "3d" ? "rotate" : "pan"
 
   return (
     <div className="relative h-full min-h-0 overflow-hidden bg-background">
       <GraphCanvasErrorBoundary
+        key={canvasKey}
         fallback={
           <StaticGraphFallback
             graph={graph}
@@ -152,11 +159,13 @@ export function ReagraphWorkspace({
         }
       >
         <GraphCanvas
+          key={canvasKey}
           ref={canvasRef}
           nodes={nodes}
           edges={edges}
           theme={graphTheme}
           layoutType={layoutType}
+          cameraMode={cameraMode}
           selections={selections}
           draggable
           animated
@@ -166,6 +175,7 @@ export function ReagraphWorkspace({
           lassoType="all"
           minZoom={0.2}
           maxZoom={80}
+          renderNode={renderNode}
           contextMenu={(event: ContextMenuEvent) =>
             renderContextMenu(event, onExpandNode)
           }
@@ -200,6 +210,14 @@ export function ReagraphWorkspace({
   )
 }
 
+function renderNode(props: NodeRendererProps) {
+  if (props.node.icon) {
+    return <SphereWithIcon {...props} image={props.node.icon} />
+  }
+
+  return <Sphere {...props} />
+}
+
 function renderContextMenu(
   event: ContextMenuEvent,
   onExpandNode: (nodeId: string) => void
@@ -210,7 +228,7 @@ function renderContextMenu(
   const nodeId = event.data.id
 
   return (
-    <div className="min-w-36 overflow-hidden rounded-md border border-border bg-popover shadow-md">
+    <GraphContextMenu onClose={event.onClose}>
       <button
         className="flex w-full items-center gap-2 px-3 py-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground"
         type="button"
@@ -222,6 +240,52 @@ function renderContextMenu(
         <Maximize className="size-3.5 shrink-0" />
         Expand
       </button>
+    </GraphContextMenu>
+  )
+}
+
+function GraphContextMenu({
+  children,
+  onClose,
+}: {
+  children: React.ReactNode
+  onClose: () => void
+}) {
+  const menuRef = React.useRef<HTMLDivElement>(null)
+
+  React.useEffect(() => {
+    function closeOnOutsidePointer(event: PointerEvent | MouseEvent) {
+      const target = event.target
+      if (target instanceof Node && menuRef.current?.contains(target)) {
+        return
+      }
+
+      onClose()
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose()
+      }
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true)
+    document.addEventListener("contextmenu", closeOnOutsidePointer, true)
+    document.addEventListener("keydown", closeOnEscape, true)
+
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer, true)
+      document.removeEventListener("contextmenu", closeOnOutsidePointer, true)
+      document.removeEventListener("keydown", closeOnEscape, true)
+    }
+  }, [onClose])
+
+  return (
+    <div
+      className="min-w-36 overflow-hidden rounded-md border border-border bg-popover shadow-md"
+      ref={menuRef}
+    >
+      {children}
     </div>
   )
 }
