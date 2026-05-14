@@ -5,15 +5,15 @@
   "scripts": {
     "build": "turbo build",
     "dev": "turbo dev",
-    "lint": "turbo lint",
-    "format": "turbo format",
+    "check": "biome check .",
+    "check:fix": "biome check --write .",
+    "lint": "pnpm check",
+    "format": "pnpm check:fix",
     "typecheck": "turbo typecheck"
   },
   "devDependencies": {
-    "@workspace/eslint-config": "workspace:*",
+    "@biomejs/biome": "^2.4.15",
     "@workspace/typescript-config": "workspace:*",
-    "prettier": "^3.8.1",
-    "prettier-plugin-tailwindcss": "^0.7.2",
     "turbo": "^2.8.17",
     "typescript": "5.9.3"
   },
