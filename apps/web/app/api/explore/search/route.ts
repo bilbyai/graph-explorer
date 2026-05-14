@@ -23,7 +23,10 @@ export async function POST(request: Request) {
   const body = requestSchema.safeParse(await request.json())
 
   if (!body.success) {
-    return Response.json({ error: "Invalid graph search request" }, { status: 400 })
+    return Response.json(
+      { error: "Invalid graph search request" },
+      { status: 400 }
+    )
   }
 
   if (body.data.connectionId === "sample") {
@@ -37,7 +40,11 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await searchGraph(connection, body.data.search, body.data.limit)
+    const result = await searchGraph(
+      connection,
+      body.data.search,
+      body.data.limit
+    )
 
     return Response.json(result.graph)
   } catch {

@@ -13,6 +13,7 @@
       "!**/dist",
       "!**/.turbo",
       "!**/coverage",
+      "!apps/web/next-env.d.ts",
       "!pnpm-lock.yaml"
     ]
   },

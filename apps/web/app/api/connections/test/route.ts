@@ -20,7 +20,10 @@ export async function POST(request: Request) {
   const body = requestSchema.safeParse(await request.json())
 
   if (!body.success) {
-    return Response.json({ error: "Invalid connection test request" }, { status: 400 })
+    return Response.json(
+      { error: "Invalid connection test request" },
+      { status: 400 }
+    )
   }
 
   const connection = getAdminConnection(body.data.connectionId)

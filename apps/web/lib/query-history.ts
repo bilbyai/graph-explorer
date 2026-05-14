@@ -93,7 +93,9 @@ async function trimHistory() {
     totalSnapshotBytes += snapshotSize
 
     if (index >= maxEntries || totalSnapshotBytes > maxTotalSnapshotBytes) {
-      await transact<undefined>(db, "readwrite", (store) => store.delete(entry.id))
+      await transact<undefined>(db, "readwrite", (store) =>
+        store.delete(entry.id)
+      )
     }
   }
 }

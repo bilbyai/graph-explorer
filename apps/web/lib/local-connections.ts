@@ -137,11 +137,8 @@ export async function decryptLocalPassword(connection: LocalConnection) {
 export async function listLocalConnections() {
   const db = await openDb()
 
-  return transact<LocalConnection[]>(
-    db,
-    connectionStore,
-    "readonly",
-    (store) => store.getAll()
+  return transact<LocalConnection[]>(db, connectionStore, "readonly", (store) =>
+    store.getAll()
   )
 }
 

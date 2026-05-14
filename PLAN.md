@@ -29,9 +29,16 @@ The app starts with admin-provisioned connections from `CONNECTIONS_JSON_BASE64`
 - Query scope: support `MATCH`/`RETURN` only for v1.
 - Query history: include result snapshots, not just query text and params. Keep the last 100 queries, cap total stored snapshots at 25 MB, and cap each stored snapshot at 1 MB.
 - Auth: use better-auth. Users must be signed in before using the hosted app. Email auth only for v1.
+- Auth database: use Postgres for better-auth user/session storage. Production will use Neon.
 - Browser support: target current Chrome and Safari.
+- UI components: use the existing shadcn-style components from `@workspace/ui` for app controls.
 - Graph visualization: use Reagraph for the Explore canvas, with both 2D and 3D modes.
 - Compliance: no special compliance, audit log, or retention requirements for v1.
+
+## Stack
+- Always Shadcn Components!!! import components via `import { Button } from "@workspace/ui/components/button"`.
+- Use Drizzle ORM to manage the DB. Always use postgres and Neon in production.
+- Use better-auth for authentication and session management.
 
 ## Deployment Modes
 
@@ -223,6 +230,7 @@ Write blocking:
 
 2. Authentication
    - Add better-auth.
+   - Use Postgres as the auth database, with Neon expected in production.
    - Require sign-in for hosted app access.
    - Enable email auth only for v1.
    - Protect server routes/actions that expose connection metadata, query execution, and graph exploration.

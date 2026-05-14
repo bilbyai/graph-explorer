@@ -1,7 +1,7 @@
 import neo4j, {
   type Node as Neo4jNode,
-  type Path,
   type Relationship as Neo4jRelationship,
+  type Path,
 } from "neo4j-driver"
 
 import type { AdminConnection } from "@/lib/connection-registry"
@@ -263,11 +263,9 @@ export async function searchGraph(
   const trimmedSearch = search.trim().toLowerCase()
 
   if (!trimmedSearch) {
-    return runReadQuery(
-      connection,
-      "MATCH (n) RETURN n LIMIT $limit",
-      { limit: neo4j.int(limit) }
-    )
+    return runReadQuery(connection, "MATCH (n) RETURN n LIMIT $limit", {
+      limit: neo4j.int(limit),
+    })
   }
 
   return runReadQuery(

@@ -17,7 +17,9 @@ export type AdminConnection = Connection & {
 
 function createConnectionId(connection: Connection) {
   return createHash("sha256")
-    .update(`${connection.name}\0${connection.connection_url}\0${connection.username}`)
+    .update(
+      `${connection.name}\0${connection.connection_url}\0${connection.username}`
+    )
     .digest("hex")
     .slice(0, 16)
 }

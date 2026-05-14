@@ -57,14 +57,13 @@ export const env = createEnv({
       .default("false"),
     BETTER_AUTH_SECRET: z.string().optional(),
     BETTER_AUTH_URL: z.string().url().optional(),
-    BETTER_AUTH_DB_PATH: z.string().optional(),
+    DATABASE_URL: z.string().optional(),
   },
   runtimeEnv: process.env,
   emptyStringAsUndefined: true,
 })
 
 export const connections = env.CONNECTIONS_JSON_BASE64.connections
-export const isNoAuthLocalMode =
-  env.GRAPH_EXPLORER_NO_AUTH_LOCAL === "true"
+export const isNoAuthLocalMode = env.GRAPH_EXPLORER_NO_AUTH_LOCAL === "true"
 
 export type Connection = z.infer<typeof connectionSchema>

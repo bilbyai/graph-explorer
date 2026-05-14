@@ -1,18 +1,16 @@
-import { mkdirSync } from "node:fs"
-import { dirname, resolve } from "node:path"
-
 import { betterAuth } from "better-auth"
+import { drizzleAdapter } from "better-auth/adapters/drizzle"
 import { nextCookies } from "better-auth/next-js"
-import Database from "better-sqlite3"
 
+import { db } from "@/lib/db"
+import * as schema from "@/lib/db/schema"
 import { env } from "@/lib/env"
 
-const dbPath = resolve(process.cwd(), env.BETTER_AUTH_DB_PATH ?? "./data/auth.sqlite")
-
-mkdirSync(dirname(dbPath), { recursive: true })
-
 export const auth = betterAuth({
-  database: new Database(dbPath),
+  database: drizzleAdapter(db, {
+    provider: "pg",
+    schema,
+  }),
   secret:
     env.BETTER_AUTH_SECRET ??
     "development-only-change-me-graph-explorer-secret",

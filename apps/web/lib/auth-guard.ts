@@ -43,7 +43,9 @@ export async function getAppAccess(): Promise<AppAccess | null> {
   }
 }
 
-export async function getRouteAccess(request: Request): Promise<AppAccess | null> {
+export async function getRouteAccess(
+  request: Request
+): Promise<AppAccess | null> {
   if (isNoAuthLocalMode) {
     return {
       mode: "no-auth-local",

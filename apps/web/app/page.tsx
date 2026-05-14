@@ -1,27 +1,25 @@
-import { Button } from "@workspace/ui/components/button"
+import { redirect } from "next/navigation"
 
-import { connections } from "@/lib/env"
+import { GraphExplorerApp } from "@/components/graph-explorer-app"
+import { getAppAccess } from "@/lib/auth-guard"
+import { getPublicConnections } from "@/lib/connection-registry"
 
-export default function Page() {
-  const connectionCount = connections.length
+export const metadata = {
+  title: "Graph Explorer",
+  description: "Read-only Neo4j graph exploration workspace",
+}
+
+export default async function Page() {
+  const access = await getAppAccess()
+
+  if (!access) {
+    redirect("/sign-in")
+  }
 
   return (
-    <div className="flex min-h-svh p-6">
-      <div className="flex max-w-md min-w-0 flex-col gap-4 text-sm leading-loose">
-        <div>
-          <h1 className="font-medium">Project ready!</h1>
-          <p>You may now add components and start building.</p>
-          <p>We&apos;ve already added the button component for you.</p>
-          <p>
-            Loaded {connectionCount} Neo4j{" "}
-            {connectionCount === 1 ? "connection" : "connections"}.
-          </p>
-          <Button className="mt-2">Button</Button>
-        </div>
-        <div className="text-muted-foreground font-mono text-xs">
-          (Press <kbd>d</kbd> to toggle dark mode)
-        </div>
-      </div>
-    </div>
+    <GraphExplorerApp
+      access={access}
+      initialConnections={getPublicConnections()}
+    />
   )
 }

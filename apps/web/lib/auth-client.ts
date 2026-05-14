@@ -2,4 +2,6 @@
 
 import { createAuthClient } from "better-auth/react"
 
-export const authClient = createAuthClient()
+type AuthClient = ReturnType<typeof createAuthClient>
+
+export const authClient: AuthClient = createAuthClient()
