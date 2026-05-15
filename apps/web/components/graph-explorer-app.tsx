@@ -228,6 +228,7 @@ export function GraphExplorerApp({
   const [isSearchSuggesting, setIsSearchSuggesting] = React.useState(false)
   const [canvasVersion, setCanvasVersion] = React.useState(0)
   const [hiddenCategories, setHiddenCategories] = React.useState<string[]>([])
+  const [hiddenIds, setHiddenIds] = React.useState<string[]>([])
   const [status, setStatus] = React.useState("Ready")
   const [statusDetails, setStatusDetails] =
     React.useState<StatusDetails | null>(null)
@@ -289,6 +290,7 @@ export function GraphExplorerApp({
     async (connection: ConnectionOption, search: string) => {
       setStatusDetails(null)
       setGraph(emptyGraph)
+      setHiddenIds([])
       setIsGraphLoading(true)
 
       try {
@@ -704,6 +706,11 @@ export function GraphExplorerApp({
     )
   }
 
+  function hideId(id: string) {
+    setHiddenIds((ids) => (ids.includes(id) ? ids : [...ids, id]))
+    if (selection?.id === id) setSelection(null)
+  }
+
   async function deleteConnection(id: string) {
     await deleteLocalConnection(id)
     setLocalConnections((currentConnections) =>
@@ -747,6 +754,7 @@ export function GraphExplorerApp({
               void loadGraph(selectedConnection, suggestion.searchValue)
             }}
             onExpand={expandSelected}
+            onHide={hideId}
             selection={selection}
             onReset={() => {
               setGraph(emptyGraph)
@@ -754,6 +762,7 @@ export function GraphExplorerApp({
               setSearchTerm("")
               setSearchSuggestions([])
               setHiddenCategories([])
+              setHiddenIds([])
               setStatusDetails(null)
               setCanvasVersion((version) => version + 1)
               setStatus("Canvas cleared")
@@ -764,12 +773,14 @@ export function GraphExplorerApp({
               graph={graph}
               canvasKey={canvasVersion}
               hiddenCategories={hiddenCategories}
+              hiddenIds={hiddenIds}
               styling={styling}
               selected={selection}
               isLoading={isGraphLoading}
               isExpanding={isGraphExpanding}
               onSelect={setSelection}
               onExpandNode={(nodeId) => void expandNode(nodeId)}
+              onHideId={hideId}
             />
           </section>
           <DetailsPanel
@@ -988,6 +999,7 @@ function ExploreLeftPanel({
   onSearch,
   onSearchSuggestionSelect,
   onExpand,
+  onHide,
   selection,
   onReset,
 }: {
@@ -1004,6 +1016,7 @@ function ExploreLeftPanel({
   onSearch: () => void
   onSearchSuggestionSelect: (suggestion: GraphSearchSuggestion) => void
   onExpand: () => void
+  onHide: (id: string) => void
   selection: GraphSelection
   onReset: () => void
 }) {
@@ -1191,16 +1204,29 @@ function ExploreLeftPanel({
       </div>
 
       <PanelSection icon={<Settings2 className="size-4" />} title="Graph">
-        {selection?.type === "node" ? (
-          <Button
-            className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md border border-border text-xs hover:bg-accent"
-            onClick={onExpand}
-            type="button"
-            variant="outline"
-          >
-            <Maximize className="size-3.5" />
-            Expand node
-          </Button>
+        {selection ? (
+          <div className="flex gap-2">
+            {selection.type === "node" ? (
+              <Button
+                className="inline-flex h-8 flex-1 items-center justify-center gap-2 rounded-md border border-border text-xs hover:bg-accent"
+                onClick={onExpand}
+                type="button"
+                variant="outline"
+              >
+                <Maximize className="size-3.5" />
+                Expand node
+              </Button>
+            ) : null}
+            <Button
+              className="inline-flex h-8 flex-1 items-center justify-center gap-2 rounded-md border border-border text-xs hover:bg-accent"
+              onClick={() => onHide(selection.id)}
+              type="button"
+              variant="outline"
+            >
+              <EyeOff className="size-3.5" />
+              Hide
+            </Button>
+          </div>
         ) : null}
         <Button
           className="h-8 rounded-md border border-border text-xs hover:bg-accent"

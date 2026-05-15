@@ -7,7 +7,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import { Loader2, Maximize } from "lucide-react"
+import { EyeOff, Loader2, Maximize } from "lucide-react"
 import dynamic from "next/dynamic"
 import { useTheme } from "next-themes"
 import * as React from "react"
@@ -21,12 +21,7 @@ import {
   lightTheme,
   type NodeRendererProps,
 } from "reagraph"
-import {
-  CanvasTexture,
-  LinearFilter,
-  type OrthographicCamera,
-  type Texture,
-} from "three"
+import { CanvasTexture, LinearFilter, type Texture } from "three"
 
 import type { GraphNodeRecord, GraphPayload } from "@/lib/graph-types"
 import {
@@ -63,24 +58,28 @@ type ReagraphWorkspaceProps = {
   graph: GraphPayload
   canvasKey?: string | number
   hiddenCategories: string[]
+  hiddenIds?: string[]
   styling?: StylingState
   selected: GraphSelection
   isLoading?: boolean
   isExpanding?: boolean
   onSelect: (selection: GraphSelection) => void
   onExpandNode: (nodeId: string) => void
+  onHideId?: (id: string) => void
 }
 
 export function ReagraphWorkspace({
   graph,
   canvasKey,
   hiddenCategories,
+  hiddenIds,
   styling = emptyStyling,
   selected,
   isLoading = false,
   isExpanding = false,
   onSelect,
   onExpandNode,
+  onHideId,
 }: ReagraphWorkspaceProps) {
   const canvasRef = React.useRef<GraphCanvasRef>(null)
   const { resolvedTheme } = useTheme()
@@ -95,12 +94,15 @@ export function ReagraphWorkspace({
       canvas: { ...base.canvas, background: canvasBackground },
     }
   }, [canvasBackground, resolvedTheme])
+  const hiddenIdSet = React.useMemo(() => new Set(hiddenIds ?? []), [hiddenIds])
   const visibleNodes = React.useMemo(
     () =>
       graph.nodes.filter(
-        (node) => !hiddenCategories.includes(node.labels[0] ?? "Node")
+        (node) =>
+          !hiddenCategories.includes(node.labels[0] ?? "Node") &&
+          !hiddenIdSet.has(node.id)
       ),
-    [graph.nodes, hiddenCategories]
+    [graph.nodes, hiddenCategories, hiddenIdSet]
   )
   const visibleNodeIds = React.useMemo(
     () => new Set(visibleNodes.map((node) => node.id)),
@@ -111,9 +113,10 @@ export function ReagraphWorkspace({
       graph.relationships.filter(
         (relationship) =>
           visibleNodeIds.has(relationship.source) &&
-          visibleNodeIds.has(relationship.target)
+          visibleNodeIds.has(relationship.target) &&
+          !hiddenIdSet.has(relationship.id)
       ),
-    [graph.relationships, visibleNodeIds]
+    [graph.relationships, visibleNodeIds, hiddenIdSet]
   )
   const styled = React.useMemo(
     () => styleNodes(graph, styling),
@@ -193,67 +196,55 @@ export function ReagraphWorkspace({
     )
   }, [hoveredNode])
 
+  // Reagraph defaults the wheel action to DOLLY/ZOOM. Override to TRUCK so
+  // two-finger trackpad scroll pans via deltaX/deltaY. macOS pinch arrives
+  // with ctrlKey=true, which camera-controls always maps to ZOOM regardless
+  // of this setting, so pinch-to-zoom keeps working.
   React.useEffect(() => {
     if (mode !== "2d") return
-    const wrapper = wrapperRef.current
-    const canvas = canvasRef.current
-    if (!wrapper || !canvas) return
-    const controls = canvas.getControls()
-    if (!controls) return
+    let cancelled = false
+    let attempts = 0
+    const apply = () => {
+      if (cancelled) return
+      const controls = canvasRef.current?.getControls() as
+        | { mouseButtons?: { wheel?: number }; dollySpeed?: number }
+        | undefined
+      if (controls?.mouseButtons) {
+        controls.mouseButtons.wheel = 2 // ACTION.TRUCK → two-finger pan
+        controls.dollySpeed = 25 // scales pinch zoom (camera-controls default 1)
+        return
+      }
+      if (attempts < 60) {
+        attempts += 1
+        window.setTimeout(apply, 50)
+      }
+    }
+    apply()
+    return () => {
+      cancelled = true
+    }
+  }, [mode])
 
-    const onWheel = (event: WheelEvent) => {
-      const camera = controls.camera as
-        | OrthographicCamera
-        | { isOrthographicCamera?: undefined }
-      if (!("isOrthographicCamera" in camera) || !camera.isOrthographicCamera) {
+  React.useEffect(() => {
+    if (!selected || !onHideId) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "h") return
+      if (!(event.metaKey || event.ctrlKey)) return
+      const target = event.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
         return
       }
       event.preventDefault()
-      event.stopPropagation()
-
-      const rect = wrapper.getBoundingClientRect()
-      if (rect.width === 0 || rect.height === 0) return
-      const worldW = camera.right - camera.left
-      const worldH = camera.top - camera.bottom
-
-      if (event.ctrlKey || event.metaKey) {
-        // Pinch (small deltas ~1-10) or Cmd+wheel (large deltas ~100).
-        const factor = Math.exp(
-          -event.deltaY * (Math.abs(event.deltaY) > 50 ? 0.002 : 0.02)
-        )
-        const minZoom = controls.minZoom ?? 0.01
-        const maxZoom = controls.maxZoom ?? Number.POSITIVE_INFINITY
-        const z1 = camera.zoom
-        const z2 = Math.min(maxZoom, Math.max(minZoom, z1 * factor))
-        if (z2 === z1) return
-        const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1
-        const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1
-        const diff = 1 / z1 - 1 / z2
-        const offsetX = (ndcX * worldW * diff) / 2
-        const offsetY = (ndcY * worldH * diff) / 2
-        controls.zoomTo(z2, false)
-        controls.truck(offsetX, -offsetY, false)
-        return
-      }
-
-      // Two-finger pan. deltaMode 1=lines, 2=pages.
-      const modeFactor =
-        event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1
-      const dx =
-        (event.deltaX * modeFactor * worldW) / (camera.zoom * rect.width)
-      const dy =
-        (event.deltaY * modeFactor * worldH) / (camera.zoom * rect.height)
-      controls.truck(dx, dy, false)
+      onHideId(selected.id)
     }
-
-    wrapper.addEventListener("wheel", onWheel, {
-      capture: true,
-      passive: false,
-    })
-    return () => {
-      wrapper.removeEventListener("wheel", onWheel, { capture: true })
-    }
-  }, [mode])
+    document.addEventListener("keydown", onKeyDown)
+    return () => document.removeEventListener("keydown", onKeyDown)
+  }, [selected, onHideId])
 
   const handleCanvasClick = React.useCallback(() => {
     onSelect(null)
@@ -278,10 +269,43 @@ export function ReagraphWorkspace({
 
   const handleNodePointerOut = React.useCallback(() => setHoveredNode(null), [])
 
-  const handleContextMenu = React.useCallback(
-    (event: ContextMenuEvent) => renderContextMenu(event, onExpandNode),
+  const pendingFocusRef = React.useRef<string | null>(null)
+  const prevExpandingRef = React.useRef(isExpanding)
+
+  const handleExpandNode = React.useCallback(
+    (nodeId: string) => {
+      pendingFocusRef.current = nodeId
+      onExpandNode(nodeId)
+    },
     [onExpandNode]
   )
+
+  const handleContextMenu = React.useCallback(
+    (event: ContextMenuEvent) =>
+      renderContextMenu(event, handleExpandNode, onHideId),
+    [handleExpandNode, onHideId]
+  )
+
+  React.useEffect(() => {
+    const wasExpanding = prevExpandingRef.current
+    prevExpandingRef.current = isExpanding
+    if (!wasExpanding || isExpanding) return
+    const nodeId = pendingFocusRef.current
+    pendingFocusRef.current = null
+    if (!nodeId) return
+    // Force-directed layout keeps shifting the new node for a moment; pan
+    // once positions have settled, then again to catch any residual drift.
+    const firstTimer = window.setTimeout(() => {
+      canvasRef.current?.centerGraph?.([nodeId], { animated: true })
+    }, 500)
+    const secondTimer = window.setTimeout(() => {
+      canvasRef.current?.centerGraph?.([nodeId], { animated: true })
+    }, 1400)
+    return () => {
+      window.clearTimeout(firstTimer)
+      window.clearTimeout(secondTimer)
+    }
+  }, [isExpanding])
 
   return (
     <div
@@ -308,7 +332,7 @@ export function ReagraphWorkspace({
           theme={graphTheme}
           layoutType={mode === "3d" ? "forceDirected3d" : "forceDirected2d"}
           layoutOverrides={layoutOverrides}
-          cameraMode={mode === "3d" ? "orbit" : "pan"}
+          cameraMode={mode === "3d" ? "orbit" : "orthographic"}
           selections={selections}
           draggable
           animated
@@ -339,9 +363,11 @@ export function ReagraphWorkspace({
         </div>
       )}
       {!isLoading && isExpanding && (
-        <div className="pointer-events-none absolute top-3 right-3 z-10 flex items-center gap-2 rounded-md border border-primary bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground shadow-md">
-          <Loader2 className="size-3.5 animate-spin" />
-          Expanding…
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-primary/10">
+          <div className="flex items-center gap-2 rounded-md border border-primary bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-lg">
+            <Loader2 className="size-4 animate-spin" />
+            Expanding…
+          </div>
         </div>
       )}
       {hoveredNode && <NodeHoverCard node={hoveredNode} ref={hoverCardRef} />}
@@ -511,7 +537,8 @@ function truncateForCircle(text: string, size: number): string {
 
 function renderContextMenu(
   event: ContextMenuEvent,
-  onExpandNode: (nodeId: string) => void
+  onExpandNode: (nodeId: string) => void,
+  onHideId?: (id: string) => void
 ) {
   const isEdge = "source" in event.data
   if (isEdge) return null
@@ -534,6 +561,24 @@ function renderContextMenu(
         <Maximize className="size-3.5 shrink-0" />
         Expand
       </button>
+      {onHideId && (
+        <button
+          className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground"
+          type="button"
+          onClick={() => {
+            onHideId(nodeId)
+            event.onClose()
+          }}
+        >
+          <span className="flex items-center gap-2">
+            <EyeOff className="size-3.5 shrink-0" />
+            Hide
+          </span>
+          <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+            ⌘ H
+          </kbd>
+        </button>
+      )}
     </GraphContextMenu>
   )
 }
