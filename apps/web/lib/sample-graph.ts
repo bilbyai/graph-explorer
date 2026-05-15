@@ -4,18 +4,7 @@ import type {
   GraphSearchSuggestion,
   SchemaPayload,
 } from "@/lib/graph-types"
-
-const categoryColors: Record<string, string> = {
-  Bank: "#8acfd2",
-  Company: "#ffb8b0",
-  ESG: "#ffec8a",
-  GICS: "#d6af00",
-  Media: "#d866d8",
-  Person: "#b7b790",
-  Pilot: "#62d85a",
-  Region: "#7fb276",
-  StateBody: "#a9c4f5",
-}
+import { getDefaultLabelColor } from "@/lib/node-styling"
 
 export const sampleGraph: GraphPayload = {
   nodes: [
@@ -71,7 +60,7 @@ export const sampleSchema: SchemaPayload = {
   }).map(([name, count]) => ({
     name,
     count,
-    color: categoryColors[name] ?? "#8acfd2",
+    color: getCategoryColor(name),
   })),
   relationshipTypes: [
     { name: "IN_INDUSTRY", count: 7 },
@@ -88,7 +77,7 @@ export const sampleSchema: SchemaPayload = {
 }
 
 export function getCategoryColor(label: string) {
-  return categoryColors[label] ?? "#8acfd2"
+  return getDefaultLabelColor(label)
 }
 
 export function searchSampleGraph(search: string): GraphPayload {

@@ -214,7 +214,6 @@ export function GraphExplorerApp({
   const [graph, setGraph] = React.useState<GraphPayload>(sampleGraph)
   const [schema, setSchema] = React.useState<SchemaPayload>(sampleSchema)
   const [selection, setSelection] = React.useState<GraphSelection>(null)
-  const [graphMode, setGraphMode] = React.useState<"2d" | "3d">("2d")
   const [searchTerm, setSearchTerm] = React.useState("")
   const [searchSuggestions, setSearchSuggestions] = React.useState<
     GraphSearchSuggestion[]
@@ -714,8 +713,6 @@ export function GraphExplorerApp({
       {activeTab === "explore" ? (
         <section className="grid min-h-0 flex-1 grid-cols-[310px_minmax(0,1fr)_330px] border-t border-border max-xl:grid-cols-[280px_minmax(0,1fr)] max-lg:grid-cols-1">
           <ExploreLeftPanel
-            graphMode={graphMode}
-            onGraphModeChange={setGraphMode}
             searchTerm={searchTerm}
             onSearchTermChange={setSearchTerm}
             schema={schema}
@@ -746,7 +743,6 @@ export function GraphExplorerApp({
           <section className="min-h-0 border-x border-border max-lg:h-[58vh]">
             <ReagraphWorkspace
               graph={graph}
-              mode={graphMode}
               canvasKey={canvasVersion}
               hiddenCategories={hiddenCategories}
               styling={styling}
@@ -822,6 +818,8 @@ function TopBar({
   onManageConnections: () => void
 }) {
   const { resolvedTheme, setTheme } = useTheme()
+  const [mounted, setMounted] = React.useState(false)
+  React.useEffect(() => setMounted(true), [])
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between gap-4 px-4">
@@ -931,11 +929,13 @@ function TopBar({
           title="Toggle theme"
           variant="outline"
         >
-          {resolvedTheme === "dark" ? (
-            <Sun className="size-4" />
-          ) : (
-            <Moon className="size-4" />
-          )}
+          <span suppressHydrationWarning>
+            {mounted && resolvedTheme === "dark" ? (
+              <Sun className="size-4" />
+            ) : (
+              <Moon className="size-4" />
+            )}
+          </span>
         </Button>
         {access.mode === "authenticated" ? (
           <Button
@@ -954,14 +954,12 @@ function TopBar({
 }
 
 function ExploreLeftPanel({
-  graphMode,
   searchTerm,
   schema,
   graph,
   hiddenCategories,
   styling,
   onStylingChange,
-  onGraphModeChange,
   onSearchTermChange,
   onToggleCategory,
   searchSuggestions,
@@ -971,14 +969,12 @@ function ExploreLeftPanel({
   onExpand,
   onReset,
 }: {
-  graphMode: "2d" | "3d"
   searchTerm: string
   schema: SchemaPayload
   graph: GraphPayload
   hiddenCategories: string[]
   styling: StylingState
   onStylingChange: (next: StylingState) => void
-  onGraphModeChange: (mode: "2d" | "3d") => void
   onSearchTermChange: (value: string) => void
   onToggleCategory: (category: string) => void
   searchSuggestions: GraphSearchSuggestion[]
@@ -1176,20 +1172,6 @@ function ExploreLeftPanel({
       </div>
 
       <PanelSection icon={<Settings2 className="size-4" />} title="Graph">
-        <Tabs
-          className="w-full"
-          value={graphMode}
-          onValueChange={(value) => onGraphModeChange(value as "2d" | "3d")}
-        >
-          <TabsList className="grid h-9 w-full grid-cols-2">
-            <TabsTrigger className="text-sm" value="2d">
-              2D
-            </TabsTrigger>
-            <TabsTrigger className="text-sm" value="3d">
-              3D
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
         <div className="grid grid-cols-2 gap-2">
           <Button
             className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-border text-xs hover:bg-accent"

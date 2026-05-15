@@ -34,6 +34,7 @@ import * as React from "react"
 import { ColorPicker } from "@/components/color-picker"
 import type { GraphPayload, SchemaPayload } from "@/lib/graph-types"
 import {
+  DEFAULT_LABEL_COLORS,
   DEFAULT_RELATIONSHIP_COLOR,
   detectPropertyType,
   emptyStyling,
@@ -1489,23 +1490,11 @@ function UniqueEditor({
     [rule.property, graph]
   )
   const map = new Map(rule.unique?.map((entry) => [entry.value, entry]))
-  const palette = React.useMemo(
-    () => [
-      "#8acfd2",
-      "#ffb8b0",
-      "#ffec8a",
-      "#d6af00",
-      "#d866d8",
-      "#b7b790",
-      "#62d85a",
-      "#7fb276",
-      "#a9c4f5",
-    ],
-    []
-  )
+  const palette = React.useMemo(() => [...DEFAULT_LABEL_COLORS], [])
 
   const colorFor = React.useCallback(
-    (index: number) => palette[index % palette.length] ?? "#8acfd2",
+    (index: number) =>
+      palette[index % palette.length] ?? DEFAULT_LABEL_COLORS[0],
     [palette]
   )
 

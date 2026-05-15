@@ -15,7 +15,9 @@
       "!**/coverage",
       "!apps/web/next-env.d.ts",
       "!pnpm-lock.yaml",
-      "!.devrefs/references"
+      "!.devrefs/references",
+      "!.claude",
+      "!.agents"
     ]
   },
   "formatter": {

@@ -188,5 +188,55 @@ const nodes = [
 - 3D layouts (`*3d` suffix) require `cameraMode="orbit"` for proper navigation
 - Force-directed layouts run asynchronously; `animated={true}` shows the simulation settling
 - Tree/hierarchical layouts work best with DAG (directed acyclic graph) data
-- `'custom'` layout type expects you to provide node positions via `fx`/`fy`/`fz` on each node
+- `'custom'` layout type expects you to provide a `getNodePosition` callback via `layoutOverrides` (see below). Per-node `fx`/`fy`/`fz` works with any layout, not only `custom`.
 - Cluster-aware layouts group nodes by `clusterAttribute` when set
+
+## Custom Layout
+
+Set `layoutType="custom"` and pass a `getNodePosition` callback inside `layoutOverrides`.
+
+### Signature
+
+```ts
+type NodePositionArgs = {
+  graph: any        // graphology Graph instance
+  drags?: Record<string, { x: number; y: number; z: number }>
+  nodes: InternalGraphNode[]
+  edges: InternalGraphEdge[]
+}
+
+type CustomLayoutInputs = {
+  getNodePosition: (
+    id: string,
+    args: NodePositionArgs
+  ) => { x: number; y: number; z: number }
+}
+```
+
+Return `{ x, y, z: 0 }` for 2D layouts. `drags` lets you preserve user-dragged positions — read from it inside the callback if non-empty.
+
+### Example
+
+```tsx
+<GraphCanvas
+  layoutType="custom"
+  layoutOverrides={{
+    getNodePosition: (id, { nodes }) => {
+      const idx = nodes.findIndex((n) => n.id === id)
+      return {
+        x: 25 * idx,
+        y: idx % 2 === 0 ? 0 : 50,
+        z: 0,
+      }
+    },
+  } as CustomLayoutInputs}
+  nodes={nodes}
+  edges={edges}
+/>
+```
+
+### Notes
+
+- Use `args.graph` (graphology) for neighbour/degree lookups when positioning by topology.
+- Reach for `layoutOverrides` (tuning the built-ins) before custom — only build a custom layout when no built-in fits.
+- `getNodePosition` runs synchronously per node during layout; keep it cheap.

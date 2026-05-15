@@ -65,6 +65,45 @@ export type RelationshipStyle = {
 
 export const DEFAULT_RELATIONSHIP_COLOR = "#8f97a3"
 
+export const DEFAULT_LABEL_COLORS = [
+  "#604A0E",
+  "#C990C0",
+  "#F79767",
+  "#57C7E3",
+  "#F16667",
+  "#D9C8AE",
+  "#8DCC93",
+  "#ECB5C9",
+  "#4C8EDA",
+  "#FFC454",
+  "#DA7194",
+  "#569480",
+] as const
+
+export const DEFAULT_NODE_DIAMETERS = [10, 20, 50, 65, 80] as const
+export const DEFAULT_NODE_DIAMETER = 50
+
+export function getDefaultLabelColor(label: string): string {
+  let hash = 0
+  for (let i = 0; i < label.length; i += 1) {
+    hash = (hash * 31 + label.charCodeAt(i)) | 0
+  }
+  const index = Math.abs(hash) % DEFAULT_LABEL_COLORS.length
+  return DEFAULT_LABEL_COLORS[index] ?? DEFAULT_LABEL_COLORS[0]
+}
+
+const CAPTION_NAME_KEYS = ["name", "title", "label"] as const
+
+function fallbackCaption(node: GraphNodeRecord): string {
+  for (const key of CAPTION_NAME_KEYS) {
+    const value = node.properties[key]
+    if (typeof value === "string" && value.trim() !== "") return value
+    if (typeof value === "number" || typeof value === "bigint")
+      return String(value)
+  }
+  return node.labels[0] ?? node.id
+}
+
 export type StylingState = {
   labelStyles: Record<string, LabelStyle>
   relationshipStyles: Record<string, RelationshipStyle>
@@ -328,7 +367,8 @@ export function styleNode(
 ): StyledNode {
   const primaryLabel = node.labels[0] ?? "Node"
   const labelStyle = styling.labelStyles[primaryLabel]
-  const baseColor = labelStyle?.color ?? node.color
+  const baseColor =
+    labelStyle?.color ?? node.color ?? getDefaultLabelColor(primaryLabel)
   const baseSize = node.size * (labelStyle?.sizeMultiplier ?? 1)
 
   let merged = { color: baseColor, size: baseSize }
@@ -336,12 +376,16 @@ export function styleNode(
     merged = applyRule(rule, node, merged)
   }
 
-  let caption = node.caption
+  const captionFromNode =
+    node.caption && node.caption.trim() !== ""
+      ? node.caption
+      : fallbackCaption(node)
+  let caption = captionFromNode
   let hoverText = ""
   if (labelStyle?.text?.some((row) => row.showOnNode)) {
     caption =
       buildCaption(node, labelStyle.text, (row) => row.showOnNode) ||
-      node.caption
+      captionFromNode
   }
   if (labelStyle?.text) {
     hoverText = buildCaption(node, labelStyle.text, (row) => row.showOnHover)
