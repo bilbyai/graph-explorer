@@ -1,7 +1,13 @@
 "use client"
 
 import { Button } from "@workspace/ui/components/button"
-import { Maximize } from "lucide-react"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
+import { Loader2, Maximize } from "lucide-react"
 import dynamic from "next/dynamic"
 import { useTheme } from "next-themes"
 import * as React from "react"
@@ -15,7 +21,12 @@ import {
   lightTheme,
   type NodeRendererProps,
 } from "reagraph"
-import { CanvasTexture, LinearFilter, type Texture } from "three"
+import {
+  CanvasTexture,
+  LinearFilter,
+  type OrthographicCamera,
+  type Texture,
+} from "three"
 
 import type { GraphNodeRecord, GraphPayload } from "@/lib/graph-types"
 import {
@@ -54,6 +65,8 @@ type ReagraphWorkspaceProps = {
   hiddenCategories: string[]
   styling?: StylingState
   selected: GraphSelection
+  isLoading?: boolean
+  isExpanding?: boolean
   onSelect: (selection: GraphSelection) => void
   onExpandNode: (nodeId: string) => void
 }
@@ -64,6 +77,8 @@ export function ReagraphWorkspace({
   hiddenCategories,
   styling = emptyStyling,
   selected,
+  isLoading = false,
+  isExpanding = false,
   onSelect,
   onExpandNode,
 }: ReagraphWorkspaceProps) {
@@ -135,30 +150,138 @@ export function ReagraphWorkspace({
       })),
     [visibleRelationships, styling]
   )
-  const selections = selected ? [selected.id] : []
+  const selections = React.useMemo(
+    () => (selected ? [selected.id] : EMPTY_SELECTIONS),
+    [selected]
+  )
+  const layoutOverrides = React.useMemo(
+    () => ({ nodeStrength: -600, linkDistance: 140 }),
+    []
+  )
+  const [mode, setMode] = React.useState<"2d" | "3d">("2d")
 
   const wrapperRef = React.useRef<HTMLDivElement>(null)
+  const hoverCardRef = React.useRef<HTMLDivElement>(null)
+  const pointerRef = React.useRef({ x: 0, y: 0 })
+  const hoveredNodeRef = React.useRef<GraphNodeRecord | null>(null)
   const [hoveredNode, setHoveredNode] = React.useState<GraphNodeRecord | null>(
     null
   )
-  const [pointer, setPointer] = React.useState<{ x: number; y: number }>({
-    x: 0,
-    y: 0,
-  })
 
   React.useEffect(() => {
-    const el = wrapperRef.current
-    if (!el) return
+    hoveredNodeRef.current = hoveredNode
+  }, [hoveredNode])
+
+  React.useEffect(() => {
+    const wrapper = wrapperRef.current
+    if (!wrapper) return
     const onMove = (event: PointerEvent) => {
-      const rect = el.getBoundingClientRect()
-      setPointer({
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
-      })
+      pointerRef.current = { x: event.clientX, y: event.clientY }
+      if (!hoveredNodeRef.current) return
+      positionHoverCard(wrapper, hoverCardRef.current, pointerRef.current)
     }
-    el.addEventListener("pointermove", onMove)
-    return () => el.removeEventListener("pointermove", onMove)
+    wrapper.addEventListener("pointermove", onMove, { passive: true })
+    return () => wrapper.removeEventListener("pointermove", onMove)
   }, [])
+
+  React.useLayoutEffect(() => {
+    if (!hoveredNode) return
+    positionHoverCard(
+      wrapperRef.current,
+      hoverCardRef.current,
+      pointerRef.current
+    )
+  }, [hoveredNode])
+
+  React.useEffect(() => {
+    if (mode !== "2d") return
+    const wrapper = wrapperRef.current
+    const canvas = canvasRef.current
+    if (!wrapper || !canvas) return
+    const controls = canvas.getControls()
+    if (!controls) return
+
+    const onWheel = (event: WheelEvent) => {
+      const camera = controls.camera as
+        | OrthographicCamera
+        | { isOrthographicCamera?: undefined }
+      if (!("isOrthographicCamera" in camera) || !camera.isOrthographicCamera) {
+        return
+      }
+      event.preventDefault()
+      event.stopPropagation()
+
+      const rect = wrapper.getBoundingClientRect()
+      if (rect.width === 0 || rect.height === 0) return
+      const worldW = camera.right - camera.left
+      const worldH = camera.top - camera.bottom
+
+      if (event.ctrlKey || event.metaKey) {
+        // Pinch (small deltas ~1-10) or Cmd+wheel (large deltas ~100).
+        const factor = Math.exp(
+          -event.deltaY * (Math.abs(event.deltaY) > 50 ? 0.002 : 0.02)
+        )
+        const minZoom = controls.minZoom ?? 0.01
+        const maxZoom = controls.maxZoom ?? Number.POSITIVE_INFINITY
+        const z1 = camera.zoom
+        const z2 = Math.min(maxZoom, Math.max(minZoom, z1 * factor))
+        if (z2 === z1) return
+        const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1
+        const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1
+        const diff = 1 / z1 - 1 / z2
+        const offsetX = (ndcX * worldW * diff) / 2
+        const offsetY = (ndcY * worldH * diff) / 2
+        controls.zoomTo(z2, false)
+        controls.truck(offsetX, -offsetY, false)
+        return
+      }
+
+      // Two-finger pan. deltaMode 1=lines, 2=pages.
+      const modeFactor =
+        event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1
+      const dx =
+        (event.deltaX * modeFactor * worldW) / (camera.zoom * rect.width)
+      const dy =
+        (event.deltaY * modeFactor * worldH) / (camera.zoom * rect.height)
+      controls.truck(dx, dy, false)
+    }
+
+    wrapper.addEventListener("wheel", onWheel, {
+      capture: true,
+      passive: false,
+    })
+    return () => {
+      wrapper.removeEventListener("wheel", onWheel, { capture: true })
+    }
+  }, [mode])
+
+  const handleCanvasClick = React.useCallback(() => {
+    onSelect(null)
+    setHoveredNode(null)
+  }, [onSelect])
+
+  const handleNodeClick = React.useCallback(
+    (node: InternalGraphNode) => onSelect({ type: "node", id: node.id }),
+    [onSelect]
+  )
+
+  const handleEdgeClick = React.useCallback(
+    (edge: InternalGraphEdge) =>
+      onSelect({ type: "relationship", id: edge.id }),
+    [onSelect]
+  )
+
+  const handleNodePointerOver = React.useCallback((node: InternalGraphNode) => {
+    const data = (node.data ?? null) as GraphNodeRecord | null
+    setHoveredNode(data)
+  }, [])
+
+  const handleNodePointerOut = React.useCallback(() => setHoveredNode(null), [])
+
+  const handleContextMenu = React.useCallback(
+    (event: ContextMenuEvent) => renderContextMenu(event, onExpandNode),
+    [onExpandNode]
+  )
 
   return (
     <div
@@ -183,12 +306,9 @@ export function ReagraphWorkspace({
           nodes={nodes}
           edges={edges}
           theme={graphTheme}
-          layoutType="forceDirected2d"
-          layoutOverrides={{
-            nodeStrength: -600,
-            linkDistance: 140,
-          }}
-          cameraMode="pan"
+          layoutType={mode === "3d" ? "forceDirected3d" : "forceDirected2d"}
+          layoutOverrides={layoutOverrides}
+          cameraMode={mode === "3d" ? "orbit" : "pan"}
           selections={selections}
           draggable
           animated
@@ -198,34 +318,60 @@ export function ReagraphWorkspace({
           lassoType="all"
           minZoom={0.2}
           maxZoom={80}
-          renderNode={renderNode}
-          contextMenu={(event: ContextMenuEvent) =>
-            renderContextMenu(event, onExpandNode)
-          }
-          onCanvasClick={() => {
-            onSelect(null)
-            setHoveredNode(null)
-          }}
-          onNodeClick={(node: InternalGraphNode) =>
-            onSelect({ type: "node", id: node.id })
-          }
-          onEdgeClick={(edge: InternalGraphEdge) =>
-            onSelect({ type: "relationship", id: edge.id })
-          }
-          onNodePointerOver={(node: InternalGraphNode) => {
-            const data = (node.data ?? null) as GraphNodeRecord | null
-            setHoveredNode(data)
-          }}
-          onNodePointerOut={() => setHoveredNode(null)}
+          renderNode={mode === "3d" ? undefined : renderNode}
+          contextMenu={handleContextMenu}
+          onCanvasClick={handleCanvasClick}
+          onNodeClick={handleNodeClick}
+          onEdgeClick={handleEdgeClick}
+          onNodePointerOver={handleNodePointerOver}
+          onNodePointerOut={handleNodePointerOut}
         />
       </GraphCanvasErrorBoundary>
-      {hoveredNode && (
-        <NodeHoverCard
-          node={hoveredNode}
-          pointer={pointer}
-          wrapperRef={wrapperRef}
-        />
+      {isLoading && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-background/75 backdrop-blur-sm">
+          <Loader2 className="size-7 animate-spin text-muted-foreground" />
+          <div className="text-sm text-muted-foreground">Loading graph…</div>
+        </div>
       )}
+      {!isLoading && graph.nodes.length === 0 && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+          <div className="text-sm text-muted-foreground">No graph data</div>
+        </div>
+      )}
+      {!isLoading && isExpanding && (
+        <div className="pointer-events-none absolute top-3 right-3 z-10 flex items-center gap-2 rounded-md border border-primary bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground shadow-md">
+          <Loader2 className="size-3.5 animate-spin" />
+          Expanding…
+        </div>
+      )}
+      {hoveredNode && <NodeHoverCard node={hoveredNode} ref={hoverCardRef} />}
+      <TooltipProvider delayDuration={150}>
+        <div className="absolute top-3 left-3 flex items-center gap-0.5 rounded-md border border-border bg-muted/90 p-0.5 text-xs shadow-md">
+          <Button
+            className="h-6 rounded px-2 text-xs"
+            onClick={() => setMode("2d")}
+            type="button"
+            variant={mode === "2d" ? "default" : "ghost"}
+          >
+            2D
+          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                className="h-6 rounded px-2 text-xs"
+                onClick={() => setMode("3d")}
+                type="button"
+                variant={mode === "3d" ? "default" : "ghost"}
+              >
+                3D
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              3D mode is experimental and may be unstable.
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      </TooltipProvider>
       <div className="pointer-events-none absolute right-4 bottom-4 flex flex-col gap-2 rounded-md border border-border bg-muted/90 p-2 text-xs text-muted-foreground shadow-xl">
         <Button
           className="pointer-events-auto rounded border border-border px-2 py-1 hover:bg-accent"
@@ -374,8 +520,11 @@ function renderContextMenu(
 
   return (
     <GraphContextMenu onClose={event.onClose}>
+      <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
+        Node actions
+      </div>
       <button
-        className="flex w-full items-center gap-2 px-3 py-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground"
+        className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground"
         type="button"
         onClick={() => {
           onExpandNode(nodeId)
@@ -391,25 +540,18 @@ function renderContextMenu(
 
 function NodeHoverCard({
   node,
-  pointer,
-  wrapperRef,
+  ref,
 }: {
   node: GraphNodeRecord
-  pointer: { x: number; y: number }
-  wrapperRef: React.RefObject<HTMLDivElement | null>
+  ref: React.Ref<HTMLDivElement>
 }) {
   const primaryLabel = node.labels[0] ?? "Node"
   const entries = Object.entries(node.properties).slice(0, 8)
-  const rect = wrapperRef.current?.getBoundingClientRect()
-  const maxLeft = (rect?.width ?? 0) - 320 - 16
-  const maxTop = (rect?.height ?? 0) - 240
-  const left = Math.max(8, Math.min(pointer.x + 16, Math.max(8, maxLeft)))
-  const top = Math.max(8, Math.min(pointer.y + 16, Math.max(8, maxTop)))
 
   return (
     <div
-      className="pointer-events-none absolute z-10 w-80 rounded-lg border border-border bg-popover/95 p-4 text-sm text-popover-foreground shadow-xl backdrop-blur"
-      style={{ left, top }}
+      className="pointer-events-none absolute top-0 left-0 z-10 w-80 rounded-lg border border-border bg-popover/95 p-4 text-sm text-popover-foreground shadow-xl backdrop-blur will-change-transform"
+      ref={ref}
     >
       <div className="mb-3 inline-flex items-center rounded-full bg-accent/60 px-2.5 py-1 text-xs font-medium text-accent-foreground">
         {primaryLabel}
@@ -430,6 +572,26 @@ function NodeHoverCard({
     </div>
   )
 }
+
+function positionHoverCard(
+  wrapper: HTMLDivElement | null,
+  card: HTMLDivElement | null,
+  pointer: { x: number; y: number }
+) {
+  if (!wrapper || !card) return
+  const rect = wrapper.getBoundingClientRect()
+  const x = pointer.x - rect.left
+  const y = pointer.y - rect.top
+  const cardWidth = card.offsetWidth || 320
+  const cardHeight = card.offsetHeight || 240
+  const maxLeft = rect.width - cardWidth - 16
+  const maxTop = rect.height - cardHeight - 16
+  const left = Math.max(8, Math.min(x + 16, Math.max(8, maxLeft)))
+  const top = Math.max(8, Math.min(y + 16, Math.max(8, maxTop)))
+  card.style.transform = `translate3d(${left}px, ${top}px, 0)`
+}
+
+const EMPTY_SELECTIONS: string[] = []
 
 function GraphContextMenu({
   children,
@@ -469,7 +631,7 @@ function GraphContextMenu({
 
   return (
     <div
-      className="min-w-36 overflow-hidden rounded-md border border-border bg-popover shadow-md"
+      className="min-w-40 overflow-hidden rounded-md border border-border bg-popover p-1 shadow-md"
       ref={menuRef}
     >
       {children}

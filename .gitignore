@@ -141,3 +141,5 @@ vite.config.ts.timestamp-*
 
 connections.json
 .devrefs/references
+
+.claude/settings.local.json

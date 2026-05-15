@@ -52,7 +52,6 @@ import {
   Moon,
   Play,
   Plus,
-  RefreshCw,
   Search,
   Settings,
   Settings2,
@@ -109,6 +108,12 @@ import {
   searchSampleGraph,
   suggestSampleGraph,
 } from "@/lib/sample-graph"
+
+const emptySchema: SchemaPayload = {
+  labels: [],
+  relationshipTypes: [],
+  propertyKeys: [],
+}
 
 type AdminConnection = {
   id: string
@@ -211,8 +216,10 @@ export function GraphExplorerApp({
   const [selectedConnectionId, setSelectedConnectionId] = React.useState(
     initialConnections[0]?.id ?? sampleConnection.id
   )
-  const [graph, setGraph] = React.useState<GraphPayload>(sampleGraph)
-  const [schema, setSchema] = React.useState<SchemaPayload>(sampleSchema)
+  const [graph, setGraph] = React.useState<GraphPayload>(emptyGraph)
+  const [schema, setSchema] = React.useState<SchemaPayload>(emptySchema)
+  const [isGraphLoading, setIsGraphLoading] = React.useState(false)
+  const [isGraphExpanding, setIsGraphExpanding] = React.useState(false)
   const [selection, setSelection] = React.useState<GraphSelection>(null)
   const [searchTerm, setSearchTerm] = React.useState("")
   const [searchSuggestions, setSearchSuggestions] = React.useState<
@@ -281,28 +288,108 @@ export function GraphExplorerApp({
   const loadGraph = React.useCallback(
     async (connection: ConnectionOption, search: string) => {
       setStatusDetails(null)
+      setGraph(emptyGraph)
+      setIsGraphLoading(true)
 
-      if (connection.source === "sample") {
-        setGraph(searchSampleGraph(search))
-        setStatus("Loaded sample graph")
-        return
-      }
+      try {
+        if (connection.source === "sample") {
+          setGraph(searchSampleGraph(search))
+          setStatus("Loaded sample graph")
+          return
+        }
 
-      if (connection.source === "local") {
-        setStatus("Searching local graph from this browser")
+        if (connection.source === "local") {
+          setStatus("Searching local graph from this browser")
+
+          try {
+            const result = await searchLocalGraph(connection, search, 120)
+            setGraph(result.graph)
+            setStatus("Local graph loaded")
+          } catch (error) {
+            setGraph(emptyGraph)
+            setStatus("Local browser connection failed")
+            setStatusDetails({
+              message: "Local browser connection failed",
+              debug: {
+                operation: "searchLocalGraph",
+                source: "local",
+                connection: {
+                  id: connection.id,
+                  name: connection.name,
+                  host: connection.host,
+                  scheme: connection.scheme,
+                  username: connection.username,
+                },
+                search,
+                limit: 120,
+                timestamp: new Date().toISOString(),
+                error: getClientErrorDetails(error),
+              },
+            })
+          }
+          return
+        }
+
+        setStatus("Searching graph")
 
         try {
-          const result = await searchLocalGraph(connection, search, 120)
-          setGraph(result.graph)
-          setStatus("Local graph loaded")
+          const response = await fetch("/api/explore/search", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              connectionId: connection.id,
+              search,
+              limit: 120,
+            }),
+          })
+
+          if (!response.ok) {
+            const payload = getApiErrorPayload(
+              await response.json().catch(() => null)
+            )
+            const message =
+              payload.error ?? `Graph search failed (${response.status})`
+
+            setGraph(emptyGraph)
+            setStatus(message)
+            setStatusDetails({
+              message,
+              debug: {
+                operation: "fetchGraphSearch",
+                source: "admin",
+                http: {
+                  status: response.status,
+                  statusText: response.statusText,
+                },
+                connection: {
+                  id: connection.id,
+                  name: connection.name,
+                  host: connection.host,
+                  scheme: connection.scheme,
+                  username: connection.username,
+                },
+                search,
+                limit: 120,
+                timestamp: new Date().toISOString(),
+                api: payload.details,
+              },
+            })
+            return
+          }
+
+          setGraph(await response.json())
+          setStatus("Graph loaded")
+          setStatusDetails(null)
         } catch (error) {
           setGraph(emptyGraph)
-          setStatus("Local browser connection failed")
+          setStatus("Graph request failed")
           setStatusDetails({
-            message: "Local browser connection failed",
+            message: "Graph request failed",
             debug: {
-              operation: "searchLocalGraph",
-              source: "local",
+              operation: "fetchGraphSearch",
+              source: "admin",
               connection: {
                 id: connection.id,
                 name: connection.name,
@@ -317,82 +404,8 @@ export function GraphExplorerApp({
             },
           })
         }
-        return
-      }
-
-      setStatus("Searching graph")
-
-      try {
-        const response = await fetch("/api/explore/search", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            connectionId: connection.id,
-            search,
-            limit: 120,
-          }),
-        })
-
-        if (!response.ok) {
-          const payload = getApiErrorPayload(
-            await response.json().catch(() => null)
-          )
-          const message =
-            payload.error ?? `Graph search failed (${response.status})`
-
-          setGraph(emptyGraph)
-          setStatus(message)
-          setStatusDetails({
-            message,
-            debug: {
-              operation: "fetchGraphSearch",
-              source: "admin",
-              http: {
-                status: response.status,
-                statusText: response.statusText,
-              },
-              connection: {
-                id: connection.id,
-                name: connection.name,
-                host: connection.host,
-                scheme: connection.scheme,
-                username: connection.username,
-              },
-              search,
-              limit: 120,
-              timestamp: new Date().toISOString(),
-              api: payload.details,
-            },
-          })
-          return
-        }
-
-        setGraph(await response.json())
-        setStatus("Graph loaded")
-        setStatusDetails(null)
-      } catch (error) {
-        setGraph(emptyGraph)
-        setStatus("Graph request failed")
-        setStatusDetails({
-          message: "Graph request failed",
-          debug: {
-            operation: "fetchGraphSearch",
-            source: "admin",
-            connection: {
-              id: connection.id,
-              name: connection.name,
-              host: connection.host,
-              scheme: connection.scheme,
-              username: connection.username,
-            },
-            search,
-            limit: 120,
-            timestamp: new Date().toISOString(),
-            error: getClientErrorDetails(error),
-          },
-        })
+      } finally {
+        setIsGraphLoading(false)
       }
     },
     []
@@ -527,48 +540,53 @@ export function GraphExplorerApp({
       return
     }
 
-    if (selectedConnection.source === "local") {
-      setStatus("Expanding local neighborhood from this browser")
+    setIsGraphExpanding(true)
+    try {
+      if (selectedConnection.source === "local") {
+        setStatus("Expanding local neighborhood from this browser")
+
+        try {
+          const expandedGraph = await expandLocalGraph(
+            selectedConnection,
+            nodeId,
+            "both",
+            120
+          )
+
+          setGraph((currentGraph) =>
+            mergeGraphs(currentGraph, expandedGraph.graph)
+          )
+          setStatus("Local neighborhood expanded")
+        } catch {
+          setStatus("Local graph expansion failed")
+        }
+        return
+      }
+
+      setStatus("Expanding neighborhood")
 
       try {
-        const expandedGraph = await expandLocalGraph(
-          selectedConnection,
-          nodeId,
-          "both",
-          120
-        )
+        const response = await fetch("/api/explore/expand", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            connectionId: selectedConnection.id,
+            nodeId,
+            direction: "both",
+            limit: 120,
+          }),
+        })
+        const expandedGraph = (await response.json()) as GraphPayload
 
-        setGraph((currentGraph) =>
-          mergeGraphs(currentGraph, expandedGraph.graph)
-        )
-        setStatus("Local neighborhood expanded")
+        setGraph((currentGraph) => mergeGraphs(currentGraph, expandedGraph))
+        setStatus("Neighborhood expanded")
       } catch {
-        setStatus("Local graph expansion failed")
+        setStatus("Expansion failed")
       }
-      return
-    }
-
-    setStatus("Expanding neighborhood")
-
-    try {
-      const response = await fetch("/api/explore/expand", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          connectionId: selectedConnection.id,
-          nodeId,
-          direction: "both",
-          limit: 120,
-        }),
-      })
-      const expandedGraph = (await response.json()) as GraphPayload
-
-      setGraph((currentGraph) => mergeGraphs(currentGraph, expandedGraph))
-      setStatus("Neighborhood expanded")
-    } catch {
-      setStatus("Expansion failed")
+    } finally {
+      setIsGraphExpanding(false)
     }
   }
 
@@ -729,6 +747,7 @@ export function GraphExplorerApp({
               void loadGraph(selectedConnection, suggestion.searchValue)
             }}
             onExpand={expandSelected}
+            selection={selection}
             onReset={() => {
               setGraph(emptyGraph)
               setSelection(null)
@@ -747,6 +766,8 @@ export function GraphExplorerApp({
               hiddenCategories={hiddenCategories}
               styling={styling}
               selected={selection}
+              isLoading={isGraphLoading}
+              isExpanding={isGraphExpanding}
               onSelect={setSelection}
               onExpandNode={(nodeId) => void expandNode(nodeId)}
             />
@@ -967,6 +988,7 @@ function ExploreLeftPanel({
   onSearch,
   onSearchSuggestionSelect,
   onExpand,
+  selection,
   onReset,
 }: {
   searchTerm: string
@@ -982,6 +1004,7 @@ function ExploreLeftPanel({
   onSearch: () => void
   onSearchSuggestionSelect: (suggestion: GraphSearchSuggestion) => void
   onExpand: () => void
+  selection: GraphSelection
   onReset: () => void
 }) {
   const [openCategory, setOpenCategory] = React.useState<string | null>(null)
@@ -1065,11 +1088,6 @@ function ExploreLeftPanel({
     onStylingChange({ ...styling, labelStyles })
   }
 
-  const runSearch = () => {
-    setSuggestionsOpen(false)
-    onSearch()
-  }
-
   const selectSuggestion = (suggestion: GraphSearchSuggestion) => {
     setSuggestionsOpen(false)
     onSearchSuggestionSelect(suggestion)
@@ -1126,7 +1144,8 @@ function ExploreLeftPanel({
                   return
                 }
 
-                runSearch()
+                setSuggestionsOpen(false)
+                onSearch()
               }
             }}
           />
@@ -1172,26 +1191,17 @@ function ExploreLeftPanel({
       </div>
 
       <PanelSection icon={<Settings2 className="size-4" />} title="Graph">
-        <div className="grid grid-cols-2 gap-2">
+        {selection?.type === "node" ? (
           <Button
-            className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-border text-xs hover:bg-accent"
-            onClick={runSearch}
-            type="button"
-            variant="outline"
-          >
-            <RefreshCw className="size-3.5" />
-            Search
-          </Button>
-          <Button
-            className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-border text-xs hover:bg-accent"
+            className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md border border-border text-xs hover:bg-accent"
             onClick={onExpand}
             type="button"
             variant="outline"
           >
             <Maximize className="size-3.5" />
-            Expand
+            Expand node
           </Button>
-        </div>
+        ) : null}
         <Button
           className="h-8 rounded-md border border-border text-xs hover:bg-accent"
           onClick={onReset}
