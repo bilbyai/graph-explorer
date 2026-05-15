@@ -9,6 +9,7 @@ import type * as React from "react"
 
 function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
   return (
+    // biome-ignore lint/a11y/useSemanticElements: div avoids fieldset browser styling constraints
     <div
       data-slot="input-group"
       role="group"
@@ -48,6 +49,8 @@ function InputGroupAddon({
   ...props
 }: React.ComponentProps<"div"> & VariantProps<typeof inputGroupAddonVariants>) {
   return (
+    // biome-ignore lint/a11y/useSemanticElements: div avoids fieldset browser styling constraints
+    // biome-ignore lint/a11y/useKeyWithClickEvents: programmatically focuses child input, no keyboard equivalent needed
     <div
       role="group"
       data-slot="input-group-addon"

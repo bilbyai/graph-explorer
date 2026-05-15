@@ -9,6 +9,7 @@ export type NodeTextRow = {
 export type LabelStyle = {
   color?: string
   sizeMultiplier?: number
+  textSize?: number
   text: NodeTextRow[]
   icon?: string
 }
@@ -55,6 +56,11 @@ export type StyleRule = {
 
 export type RelationshipStyle = {
   color?: string
+  sizeMultiplier?: number
+  textSize?: number
+  textAlign?: "above" | "below"
+  showLabel?: boolean
+  showLabelOnHover?: boolean
 }
 
 export const DEFAULT_RELATIONSHIP_COLOR = "#8f97a3"

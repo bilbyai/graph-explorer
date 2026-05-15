@@ -140,3 +140,4 @@ vite.config.ts.timestamp-*
 .vite/
 
 connections.json
+.devrefs/references

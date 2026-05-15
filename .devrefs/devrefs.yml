@@ -1,3 +1,7 @@
 # DevRefs makes cloning/updating references for agents seamless and fast.
 # Edit this file directly, or use `devrefs add <id> <description>` to add entries.
-references: []
+references:
+  - id: neo4j/neo4j-browser
+    description: "Original reference for the official neo4j browser gui"
+    remote: https://github.com/neo4j/neo4j-browser.git
+    branch: master

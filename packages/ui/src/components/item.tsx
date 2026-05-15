@@ -6,6 +6,7 @@ import type * as React from "react"
 
 function ItemGroup({ className, ...props }: React.ComponentProps<"div">) {
   return (
+    // biome-ignore lint/a11y/useSemanticElements: Item children are divs not li elements, so ul/ol would be invalid
     <div
       role="list"
       data-slot="item-group"

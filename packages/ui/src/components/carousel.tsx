@@ -117,6 +117,7 @@ function Carousel({
         canScrollNext,
       }}
     >
+      {/* biome-ignore lint/a11y/useSemanticElements: div avoids section element type constraint */}
       <div
         onKeyDownCapture={handleKeyDown}
         className={cn("relative", className)}
@@ -156,6 +157,7 @@ function CarouselItem({ className, ...props }: React.ComponentProps<"div">) {
   const { orientation } = useCarousel()
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: carousel slide uses role="group" per WAI-ARIA carousel pattern
     <div
       role="group"
       aria-roledescription="slide"
