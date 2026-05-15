@@ -19,6 +19,15 @@ import {
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@workspace/ui/components/popover"
+import {
+  RadioGroup,
+  RadioGroupItem,
+} from "@workspace/ui/components/radio-group"
 import { Tabs, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
 import { Textarea } from "@workspace/ui/components/textarea"
 import {
@@ -37,10 +46,10 @@ import {
   Eye,
   EyeOff,
   GitBranch,
-  ListFilter,
   Lock,
   LogOut,
   Maximize,
+  Minimize2,
   Moon,
   Palette,
   Play,
@@ -56,7 +65,7 @@ import {
 } from "lucide-react"
 import { useTheme } from "next-themes"
 import * as React from "react"
-
+import { ColorPicker } from "@/components/color-picker"
 import {
   type GraphSelection,
   ReagraphWorkspace,
@@ -86,7 +95,11 @@ import {
   listLocalConnections,
   saveLocalConnection,
 } from "@/lib/local-connections"
-import { emptyStyling, type StylingState } from "@/lib/node-styling"
+import {
+  DEFAULT_RELATIONSHIP_COLOR,
+  emptyStyling,
+  type StylingState,
+} from "@/lib/node-styling"
 import {
   addQueryHistoryEntry,
   listQueryHistory,
@@ -981,6 +994,49 @@ function ExploreLeftPanel({
   const [ruleStylingOpen, setRuleStylingOpen] = React.useState(false)
   const [suggestionsOpen, setSuggestionsOpen] = React.useState(false)
   const [activeSuggestionIndex, setActiveSuggestionIndex] = React.useState(-1)
+  const [sidebarTab, setSidebarTab] = React.useState<"nodes" | "relationships">(
+    "nodes"
+  )
+  const [nodeFilter, setNodeFilter] = React.useState("")
+  const [nodeScope, setNodeScope] = React.useState<
+    "all" | "in-scene" | "off-scene"
+  >("all")
+
+  const inSceneLabels = React.useMemo(() => {
+    const set = new Set<string>()
+    for (const graphNode of graph.nodes) {
+      for (const label of graphNode.labels) {
+        set.add(label)
+      }
+    }
+    return set
+  }, [graph.nodes])
+
+  const inSceneLabelCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const graphNode of graph.nodes) {
+      for (const label of graphNode.labels) {
+        counts[label] = (counts[label] ?? 0) + 1
+      }
+    }
+    return counts
+  }, [graph.nodes])
+
+  const visibleLabels = React.useMemo(() => {
+    const trimmedFilter = nodeFilter.trim().toLowerCase()
+    return schema.labels.filter((label) => {
+      if (trimmedFilter && !label.name.toLowerCase().includes(trimmedFilter)) {
+        return false
+      }
+      if (nodeScope === "in-scene" && !inSceneLabels.has(label.name)) {
+        return false
+      }
+      if (nodeScope === "off-scene" && inSceneLabels.has(label.name)) {
+        return false
+      }
+      return true
+    })
+  }, [schema.labels, nodeFilter, nodeScope, inSceneLabels])
   const showSuggestions =
     suggestionsOpen &&
     searchTerm.trim().length >= 2 &&
@@ -1034,8 +1090,8 @@ function ExploreLeftPanel({
           htmlFor="explore-search"
         >
           <Search className="size-4 text-muted-foreground" />
-          <Input
-            className="h-auto min-w-0 flex-1 border-0 bg-transparent px-0 text-sm outline-none focus-visible:ring-0"
+          <input
+            className="h-auto min-w-0 flex-1 bg-transparent px-0 text-sm outline-none placeholder:text-muted-foreground"
             id="explore-search"
             placeholder="Search nodes"
             value={searchTerm}
@@ -1167,129 +1223,438 @@ function ExploreLeftPanel({
         </Button>
       </PanelSection>
 
-      <PanelSection icon={<ListFilter className="size-4" />} title="Categories">
+      <div className="space-y-3">
+        <Tabs
+          value={sidebarTab}
+          onValueChange={(value) =>
+            setSidebarTab(value as "nodes" | "relationships")
+          }
+        >
+          <TabsList className="grid h-9 w-full grid-cols-2">
+            <TabsTrigger className="text-sm" value="nodes">
+              Nodes
+            </TabsTrigger>
+            <TabsTrigger className="text-sm" value="relationships">
+              Relationships
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        {sidebarTab === "nodes" ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <label
+                className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-background px-3"
+                htmlFor="node-filter"
+              >
+                <Search className="size-3.5 text-muted-foreground" />
+                <input
+                  className="h-auto min-w-0 flex-1 bg-transparent px-0 text-sm outline-none placeholder:text-muted-foreground"
+                  id="node-filter"
+                  placeholder="Filter categories"
+                  value={nodeFilter}
+                  onChange={(event) => setNodeFilter(event.target.value)}
+                />
+              </label>
+              <Button
+                aria-label="Collapse all"
+                className="inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-accent"
+                onClick={() => setOpenCategory(null)}
+                type="button"
+                variant="outline"
+              >
+                <Minimize2 className="size-3.5" />
+              </Button>
+            </div>
+
+            <RadioGroup
+              className="flex items-center gap-4"
+              value={nodeScope}
+              onValueChange={(value) =>
+                setNodeScope(value as "all" | "in-scene" | "off-scene")
+              }
+            >
+              <div className="flex items-center gap-2 text-sm">
+                <RadioGroupItem
+                  aria-label="All"
+                  id="node-scope-all"
+                  value="all"
+                />
+                <label className="cursor-pointer" htmlFor="node-scope-all">
+                  All
+                </label>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <RadioGroupItem
+                  aria-label="In Scene"
+                  id="node-scope-in"
+                  value="in-scene"
+                />
+                <label className="cursor-pointer" htmlFor="node-scope-in">
+                  In Scene
+                </label>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <RadioGroupItem
+                  aria-label="Off Scene"
+                  id="node-scope-off"
+                  value="off-scene"
+                />
+                <label className="cursor-pointer" htmlFor="node-scope-off">
+                  Off Scene
+                </label>
+              </div>
+            </RadioGroup>
+
+            {visibleLabels.length === 0 ? (
+              <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+                No categories match this filter.
+              </div>
+            ) : null}
+
+            {visibleLabels.map((label) => {
+              const hidden = hiddenCategories.includes(label.name)
+              const expanded = openCategory === label.name
+              const labelStyle = styling.labelStyles[label.name] ?? { text: [] }
+              const displayColor = labelStyle.color ?? label.color
+              const sceneCount = inSceneLabelCounts[label.name] ?? 0
+              const showCount =
+                nodeScope === "in-scene"
+                  ? sceneCount
+                  : nodeScope === "off-scene"
+                    ? label.count
+                    : sceneCount || label.count
+
+              return (
+                <div
+                  className="overflow-hidden rounded-md border border-border bg-background"
+                  key={label.name}
+                >
+                  <div className="flex items-center">
+                    <button
+                      aria-expanded={expanded}
+                      className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left hover:bg-accent"
+                      onClick={() =>
+                        setOpenCategory(expanded ? null : label.name)
+                      }
+                      type="button"
+                    >
+                      {expanded ? (
+                        <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+                      ) : (
+                        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                      )}
+                      <span
+                        className="size-4 shrink-0 rounded-full"
+                        style={{ backgroundColor: displayColor }}
+                      />
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                        {label.name}
+                      </span>
+                      <span className="text-xs font-semibold text-foreground">
+                        {showCount}
+                      </span>
+                    </button>
+                    <Button
+                      aria-label={
+                        hidden ? `Show ${label.name}` : `Hide ${label.name}`
+                      }
+                      className="mr-2 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+                      onClick={() => onToggleCategory(label.name)}
+                      type="button"
+                      variant="ghost"
+                    >
+                      {hidden ? (
+                        <EyeOff className="size-3.5" />
+                      ) : (
+                        <Eye className="size-3.5 text-primary" />
+                      )}
+                    </Button>
+                  </div>
+                  {expanded && (
+                    <div className="border-t border-border p-3">
+                      <LabelStylingEditor
+                        label={label.name}
+                        labelStyle={labelStyle}
+                        baseColor={label.color}
+                        graph={graph}
+                        onChange={(next) => updateLabelStyle(label.name, next)}
+                      />
+                      {styling.labelStyles[label.name] ? (
+                        <Button
+                          className="mt-3 h-7 w-full rounded-md border border-border text-xs text-muted-foreground hover:bg-accent"
+                          onClick={() => resetLabelStyle(label.name)}
+                          type="button"
+                          variant="outline"
+                        >
+                          Reset {label.name} styling
+                        </Button>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+            <div className="overflow-hidden rounded-md border border-border bg-background">
+              <button
+                aria-expanded={ruleStylingOpen}
+                className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-accent"
+                onClick={() => setRuleStylingOpen((open) => !open)}
+                type="button"
+              >
+                {ruleStylingOpen ? (
+                  <ChevronDown className="size-3.5 text-muted-foreground" />
+                ) : (
+                  <ChevronRight className="size-3.5 text-muted-foreground" />
+                )}
+                <Palette className="size-4 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                  Rule-based styling
+                </span>
+                <span className="text-xs font-semibold text-foreground">
+                  {styling.rules.length}
+                </span>
+              </button>
+              {ruleStylingOpen ? (
+                <div className="border-t border-border p-3">
+                  <RuleStylingPanel
+                    styling={styling}
+                    graph={graph}
+                    onChange={onStylingChange}
+                    framed={false}
+                  />
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : (
+          <RelationshipsList
+            schema={schema}
+            graph={graph}
+            styling={styling}
+            onStylingChange={onStylingChange}
+          />
+        )}
+
+        {(Object.keys(styling.labelStyles).length > 0 ||
+          Object.keys(styling.relationshipStyles).length > 0 ||
+          styling.rules.length > 0) && (
+          <Button
+            className="h-8 w-full rounded-md border border-border text-xs text-muted-foreground hover:bg-accent"
+            onClick={() => onStylingChange(emptyStyling)}
+            type="button"
+            variant="outline"
+          >
+            Reset all styling
+          </Button>
+        )}
+      </div>
+    </aside>
+  )
+}
+
+function RelationshipsList({
+  schema,
+  graph,
+  styling,
+  onStylingChange,
+}: {
+  schema: SchemaPayload
+  graph: GraphPayload
+  styling: StylingState
+  onStylingChange: (next: StylingState) => void
+}) {
+  const [filter, setFilter] = React.useState("")
+  const [scope, setScope] = React.useState<"all" | "in-scene" | "off-scene">(
+    "all"
+  )
+  const [openType, setOpenType] = React.useState<string | null>(null)
+
+  const inSceneTypes = React.useMemo(() => {
+    const set = new Set<string>()
+    for (const relationship of graph.relationships) {
+      set.add(relationship.type)
+    }
+    return set
+  }, [graph.relationships])
+
+  const inSceneCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const relationship of graph.relationships) {
+      counts[relationship.type] = (counts[relationship.type] ?? 0) + 1
+    }
+    return counts
+  }, [graph.relationships])
+
+  const visibleTypes = React.useMemo(() => {
+    const trimmedFilter = filter.trim().toLowerCase()
+    return schema.relationshipTypes.filter((type) => {
+      if (trimmedFilter && !type.name.toLowerCase().includes(trimmedFilter)) {
+        return false
+      }
+      if (scope === "in-scene" && !inSceneTypes.has(type.name)) return false
+      if (scope === "off-scene" && inSceneTypes.has(type.name)) return false
+      return true
+    })
+  }, [schema.relationshipTypes, filter, scope, inSceneTypes])
+
+  const setRelationshipColor = (type: string, color: string) => {
+    onStylingChange({
+      ...styling,
+      relationshipStyles: {
+        ...styling.relationshipStyles,
+        [type]: { ...styling.relationshipStyles[type], color },
+      },
+    })
+  }
+
+  const resetRelationshipStyle = (type: string) => {
+    const { [type]: _removed, ...relationshipStyles } =
+      styling.relationshipStyles
+    onStylingChange({ ...styling, relationshipStyles })
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <label
+          className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-background px-3"
+          htmlFor="relationship-filter"
+        >
+          <Search className="size-3.5 text-muted-foreground" />
+          <input
+            className="h-auto min-w-0 flex-1 bg-transparent px-0 text-sm outline-none placeholder:text-muted-foreground"
+            id="relationship-filter"
+            placeholder="Filter relationships"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+          />
+        </label>
+        <Button
+          aria-label="Collapse all"
+          className="inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-accent"
+          onClick={() => setOpenType(null)}
+          type="button"
+          variant="outline"
+        >
+          <Minimize2 className="size-3.5" />
+        </Button>
+      </div>
+
+      <RadioGroup
+        className="flex items-center gap-4"
+        value={scope}
+        onValueChange={(value) =>
+          setScope(value as "all" | "in-scene" | "off-scene")
+        }
+      >
+        <div className="flex items-center gap-2 text-sm">
+          <RadioGroupItem aria-label="All" id="rel-scope-all" value="all" />
+          <label className="cursor-pointer" htmlFor="rel-scope-all">
+            All
+          </label>
+        </div>
+        <div className="flex items-center gap-2 text-sm">
+          <RadioGroupItem
+            aria-label="In Scene"
+            id="rel-scope-in"
+            value="in-scene"
+          />
+          <label className="cursor-pointer" htmlFor="rel-scope-in">
+            In Scene
+          </label>
+        </div>
+        <div className="flex items-center gap-2 text-sm">
+          <RadioGroupItem
+            aria-label="Off Scene"
+            id="rel-scope-off"
+            value="off-scene"
+          />
+          <label className="cursor-pointer" htmlFor="rel-scope-off">
+            Off Scene
+          </label>
+        </div>
+      </RadioGroup>
+
+      {visibleTypes.length === 0 ? (
+        <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+          No relationship types match this filter.
+        </div>
+      ) : (
         <div className="space-y-2">
-          {schema.labels.map((label) => {
-            const hidden = hiddenCategories.includes(label.name)
-            const expanded = openCategory === label.name
-            const labelStyle = styling.labelStyles[label.name] ?? { text: [] }
-            const displayColor = labelStyle.color ?? label.color
+          {visibleTypes.map((type) => {
+            const styled = styling.relationshipStyles[type.name]
+            const color = styled?.color ?? DEFAULT_RELATIONSHIP_COLOR
+            const expanded = openType === type.name
+            const sceneCount = inSceneCounts[type.name] ?? 0
+            const showCount =
+              scope === "in-scene"
+                ? sceneCount
+                : scope === "off-scene"
+                  ? type.count
+                  : sceneCount || type.count
 
             return (
               <div
                 className="overflow-hidden rounded-md border border-border bg-background"
-                key={label.name}
+                key={type.name}
               >
-                <div className="flex items-center">
-                  <button
-                    aria-expanded={expanded}
-                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left hover:bg-accent"
-                    onClick={() =>
-                      setOpenCategory(expanded ? null : label.name)
-                    }
-                    type="button"
-                  >
-                    {expanded ? (
-                      <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
-                    )}
-                    <span
-                      className="size-4 shrink-0 rounded-full"
-                      style={{ backgroundColor: displayColor }}
-                    />
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                      {label.name}
-                    </span>
-                    <span className="text-xs font-semibold text-foreground">
-                      {label.count}
-                    </span>
-                  </button>
-                  <Button
-                    aria-label={
-                      hidden ? `Show ${label.name}` : `Hide ${label.name}`
-                    }
-                    className="mr-2 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
-                    onClick={() => onToggleCategory(label.name)}
-                    type="button"
-                    variant="ghost"
-                  >
-                    {hidden ? (
-                      <EyeOff className="size-3.5" />
-                    ) : (
-                      <Eye className="size-3.5 text-primary" />
-                    )}
-                  </Button>
-                </div>
-                {expanded && (
-                  <div className="border-t border-border p-3">
-                    <LabelStylingEditor
-                      label={label.name}
-                      labelStyle={labelStyle}
-                      baseColor={label.color}
-                      graph={graph}
-                      onChange={(next) => updateLabelStyle(label.name, next)}
-                    />
-                    {styling.labelStyles[label.name] ? (
-                      <Button
-                        className="mt-3 h-7 w-full rounded-md border border-border text-xs text-muted-foreground hover:bg-accent"
-                        onClick={() => resetLabelStyle(label.name)}
+                <Popover
+                  open={expanded}
+                  onOpenChange={(open) => setOpenType(open ? type.name : null)}
+                >
+                  <div className="flex items-center gap-2 pr-3">
+                    <PopoverTrigger asChild>
+                      <button
+                        aria-label={`Edit color for ${type.name}`}
+                        className="flex h-10 w-10 shrink-0 items-center justify-center"
                         type="button"
-                        variant="outline"
                       >
-                        Reset {label.name} styling
-                      </Button>
-                    ) : null}
+                        <span
+                          className="h-0.5 w-6 rounded-full"
+                          style={{ backgroundColor: color }}
+                        />
+                      </button>
+                    </PopoverTrigger>
+                    <div className="flex min-w-0 flex-1 items-center justify-between gap-2 py-2">
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                        {type.name}
+                      </span>
+                      {showCount > 0 ? (
+                        <span className="text-xs font-semibold text-foreground">
+                          {showCount}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
-                )}
+                  <PopoverContent align="start" className="w-72 p-3">
+                    <div className="space-y-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        {type.name}
+                      </div>
+                      <ColorPicker
+                        value={color}
+                        onChange={(hex) => setRelationshipColor(type.name, hex)}
+                      />
+                      {styled ? (
+                        <Button
+                          className="h-7 w-full rounded-md border border-border text-xs text-muted-foreground hover:bg-accent"
+                          onClick={() => resetRelationshipStyle(type.name)}
+                          type="button"
+                          variant="outline"
+                        >
+                          Reset {type.name} styling
+                        </Button>
+                      ) : null}
+                    </div>
+                  </PopoverContent>
+                </Popover>
               </div>
             )
           })}
-          <div className="overflow-hidden rounded-md border border-border bg-background">
-            <button
-              aria-expanded={ruleStylingOpen}
-              className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-accent"
-              onClick={() => setRuleStylingOpen((open) => !open)}
-              type="button"
-            >
-              {ruleStylingOpen ? (
-                <ChevronDown className="size-3.5 text-muted-foreground" />
-              ) : (
-                <ChevronRight className="size-3.5 text-muted-foreground" />
-              )}
-              <Palette className="size-4 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                Rule-based styling
-              </span>
-              <span className="text-xs font-semibold text-foreground">
-                {styling.rules.length}
-              </span>
-            </button>
-            {ruleStylingOpen ? (
-              <div className="border-t border-border p-3">
-                <RuleStylingPanel
-                  styling={styling}
-                  graph={graph}
-                  onChange={onStylingChange}
-                  framed={false}
-                />
-              </div>
-            ) : null}
-          </div>
-          {(Object.keys(styling.labelStyles).length > 0 ||
-            styling.rules.length > 0) && (
-            <Button
-              className="h-8 w-full rounded-md border border-border text-xs text-muted-foreground hover:bg-accent"
-              onClick={() => onStylingChange(emptyStyling)}
-              type="button"
-              variant="outline"
-            >
-              Reset all styling
-            </Button>
-          )}
         </div>
-      </PanelSection>
-    </aside>
+      )}
+    </div>
   )
 }
 

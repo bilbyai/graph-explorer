@@ -53,14 +53,29 @@ export type StyleRule = {
   unique?: Array<{ value: string; color: string; size?: number }>
 }
 
+export type RelationshipStyle = {
+  color?: string
+}
+
+export const DEFAULT_RELATIONSHIP_COLOR = "#8f97a3"
+
 export type StylingState = {
   labelStyles: Record<string, LabelStyle>
+  relationshipStyles: Record<string, RelationshipStyle>
   rules: StyleRule[]
 }
 
 export const emptyStyling: StylingState = {
   labelStyles: {},
+  relationshipStyles: {},
   rules: [],
+}
+
+export function getRelationshipColor(
+  type: string,
+  styling: StylingState
+): string {
+  return styling.relationshipStyles[type]?.color ?? DEFAULT_RELATIONSHIP_COLOR
 }
 
 export type StyledNode = {

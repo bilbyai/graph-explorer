@@ -20,7 +20,12 @@ import {
 } from "reagraph"
 
 import type { GraphPayload } from "@/lib/graph-types"
-import { emptyStyling, type StylingState, styleNodes } from "@/lib/node-styling"
+import {
+  emptyStyling,
+  getRelationshipColor,
+  type StylingState,
+  styleNodes,
+} from "@/lib/node-styling"
 import { iconToDataUri } from "@/lib/style-icons"
 
 const GraphCanvas = dynamic(
@@ -133,11 +138,11 @@ export function ReagraphWorkspace({
         source: relationship.source,
         target: relationship.target,
         label: relationship.type,
-        fill: "#8f97a3",
+        fill: getRelationshipColor(relationship.type, styling),
         arrowPlacement: "end" as const,
         data: relationship,
       })),
-    [visibleRelationships]
+    [visibleRelationships, styling]
   )
   const selections = selected ? [selected.id] : []
   const layoutType: LayoutTypes =

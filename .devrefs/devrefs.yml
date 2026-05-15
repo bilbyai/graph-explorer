@@ -1,0 +1,3 @@
+# DevRefs makes cloning/updating references for agents seamless and fast.
+# Edit this file directly, or use `devrefs add <id> <description>` to add entries.
+references: []
