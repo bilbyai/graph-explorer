@@ -13,8 +13,17 @@ import {
 } from "@workspace/ui/components/radio-group"
 import { Switch } from "@workspace/ui/components/switch"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
+import {
+  ArrowDownToLine,
+  ArrowUpToLine,
   ChevronDown,
   ChevronRight,
+  GripVertical,
   Info,
   Plus,
   RefreshCw,
@@ -25,6 +34,7 @@ import * as React from "react"
 import { ColorPicker } from "@/components/color-picker"
 import type { GraphPayload, SchemaPayload } from "@/lib/graph-types"
 import {
+  DEFAULT_RELATIONSHIP_COLOR,
   detectPropertyType,
   emptyStyling,
   getLabelProperties,
@@ -33,10 +43,27 @@ import {
   type LabelStyle,
   mixColors,
   type NodeTextRow,
+  type RelationshipStyle,
   type StyleRule,
   type StylingState,
 } from "@/lib/node-styling"
 import { iconSvgString, STYLE_ICON_OPTIONS } from "@/lib/style-icons"
+
+const STYLE_SIZE_PRESETS = [
+  { label: "0.25x", value: 0.25 },
+  { label: "0.5x", value: 0.5 },
+  { label: "1x", value: 1 },
+  { label: "2x", value: 2 },
+  { label: "4x", value: 4 },
+]
+
+const TEXT_SIZE_PRESETS = [
+  { label: "0.75x", value: 0.75 },
+  { label: "1x", value: 1 },
+  { label: "1.25x", value: 1.25 },
+  { label: "1.5x", value: 1.5 },
+  { label: "2x", value: 2 },
+]
 
 const SIZE_PRESETS = [
   { label: "0.5x", value: 0.5 },
@@ -221,6 +248,201 @@ export function LabelStylingEditor({
   )
 }
 
+export function NodeStylingPopoverContent({
+  label,
+  labelStyle,
+  baseColor,
+  graph,
+  onChange,
+}: {
+  label: string
+  labelStyle: LabelStyle
+  baseColor: string
+  graph: GraphPayload
+  onChange: (next: Partial<LabelStyle>) => void
+}) {
+  const [mode, setMode] = React.useState<"default" | "rule">("default")
+  const [defaultTab, setDefaultTab] = React.useState<
+    "color" | "size" | "text" | "icon"
+  >("color")
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-4 border-b border-border pb-1">
+        <ModeTab
+          active={mode === "default"}
+          onClick={() => setMode("default")}
+          label="Default"
+        />
+        <ModeTab
+          active={mode === "rule"}
+          onClick={() => setMode("rule")}
+          label="Rule-based"
+          icon={
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className="size-3.5 cursor-pointer text-muted-foreground" />
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-60">
+                  Nodes that do not fit defined rule styles will use Default
+                  styling
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          }
+        />
+      </div>
+
+      {mode === "default" ? (
+        <div className="space-y-3">
+          <div className="flex gap-3 border-b border-border">
+            {(["color", "size", "text", "icon"] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setDefaultTab(tab)}
+                className={`pb-1.5 text-sm capitalize transition-colors ${
+                  defaultTab === tab
+                    ? "border-b-2 border-primary text-primary"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+
+          {defaultTab === "color" && (
+            <ColorPicker
+              value={labelStyle.color ?? baseColor}
+              onChange={(hex) => onChange({ color: hex })}
+            />
+          )}
+
+          {defaultTab === "size" && (
+            <NodeSizeTab
+              value={labelStyle.sizeMultiplier ?? 1}
+              color={labelStyle.color ?? baseColor}
+              onChange={(sizeMultiplier) => onChange({ sizeMultiplier })}
+            />
+          )}
+
+          {defaultTab === "text" && (
+            <NodeTextTab
+              label={label}
+              labelStyle={labelStyle}
+              graph={graph}
+              onChange={onChange}
+            />
+          )}
+
+          {defaultTab === "icon" && (
+            <IconPicker
+              value={labelStyle.icon}
+              onChange={(icon) => onChange({ icon })}
+            />
+          )}
+        </div>
+      ) : (
+        <RulePlaceholder />
+      )}
+    </div>
+  )
+}
+
+export function RelationshipStylingPopoverContent({
+  typeName,
+  relStyle,
+  onChange,
+}: {
+  typeName: string
+  relStyle: RelationshipStyle
+  onChange: (next: Partial<RelationshipStyle>) => void
+}) {
+  const [mode, setMode] = React.useState<"default" | "rule">("default")
+  const [defaultTab, setDefaultTab] = React.useState<"color" | "size" | "text">(
+    "color"
+  )
+  const color = relStyle.color ?? DEFAULT_RELATIONSHIP_COLOR
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-4 border-b border-border pb-1">
+        <ModeTab
+          active={mode === "default"}
+          onClick={() => setMode("default")}
+          label="Default"
+        />
+        <ModeTab
+          active={mode === "rule"}
+          onClick={() => setMode("rule")}
+          label="Rule-based"
+          icon={
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className="size-3.5 cursor-pointer text-muted-foreground" />
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-60">
+                  Relationships that do not fit defined rule styles will use
+                  Default styling
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          }
+        />
+      </div>
+
+      {mode === "default" ? (
+        <div className="space-y-3">
+          <div className="flex gap-3 border-b border-border">
+            {(["color", "size", "text"] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setDefaultTab(tab)}
+                className={`pb-1.5 text-sm capitalize transition-colors ${
+                  defaultTab === tab
+                    ? "border-b-2 border-primary text-primary"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+
+          {defaultTab === "color" && (
+            <ColorPicker
+              value={color}
+              onChange={(hex) => onChange({ color: hex })}
+            />
+          )}
+
+          {defaultTab === "size" && (
+            <RelationshipSizeTab
+              value={relStyle.sizeMultiplier ?? 1}
+              color={color}
+              onChange={(sizeMultiplier) => onChange({ sizeMultiplier })}
+            />
+          )}
+
+          {defaultTab === "text" && (
+            <RelationshipTextTab
+              typeName={typeName}
+              relStyle={relStyle}
+              onChange={onChange}
+            />
+          )}
+        </div>
+      ) : (
+        <RulePlaceholder />
+      )}
+    </div>
+  )
+}
+
 export function RuleStylingPanel({
   styling,
   graph,
@@ -287,6 +509,277 @@ function ModeTab({
       {label}
       {icon}
     </button>
+  )
+}
+
+function RulePlaceholder() {
+  return (
+    <div className="space-y-2">
+      <Button
+        className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-primary/40 bg-primary/5 py-2 text-sm text-primary hover:bg-primary/10"
+        type="button"
+        variant="outline"
+      >
+        <Plus className="size-3.5" />
+        Add rule-based styling
+      </Button>
+    </div>
+  )
+}
+
+function NodeSizeTab({
+  value,
+  color,
+  onChange,
+}: {
+  value: number
+  color: string
+  onChange: (v: number) => void
+}) {
+  return (
+    <div className="space-y-2">
+      {STYLE_SIZE_PRESETS.map((preset) => {
+        const selected = value === preset.value
+        const size = Math.max(5, Math.round(preset.value * 18))
+        return (
+          <button
+            key={preset.value}
+            type="button"
+            onClick={() => onChange(preset.value)}
+            className={`flex w-full items-center justify-between rounded-md border px-4 py-3 text-sm ${
+              selected
+                ? "border-primary bg-primary/5"
+                : "border-border hover:bg-accent"
+            }`}
+          >
+            <span>{preset.label}</span>
+            <span
+              className="rounded-full"
+              style={{ width: size, height: size, backgroundColor: color }}
+            />
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function RelationshipSizeTab({
+  value,
+  color,
+  onChange,
+}: {
+  value: number
+  color: string
+  onChange: (v: number) => void
+}) {
+  return (
+    <div className="space-y-2">
+      {STYLE_SIZE_PRESETS.map((preset) => {
+        const selected = value === preset.value
+        const lineHeight = Math.max(1, Math.round(preset.value * 2.5))
+        return (
+          <button
+            key={preset.value}
+            type="button"
+            onClick={() => onChange(preset.value)}
+            className={`flex w-full items-center justify-between rounded-md border px-4 py-3 text-sm ${
+              selected
+                ? "border-primary bg-primary/5"
+                : "border-border hover:bg-accent"
+            }`}
+          >
+            <span>{preset.label}</span>
+            <span
+              className="w-12 rounded-full"
+              style={{ height: lineHeight, backgroundColor: color }}
+            />
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function NodeTextTab({
+  label,
+  labelStyle,
+  graph,
+  onChange,
+}: {
+  label: string
+  labelStyle: LabelStyle
+  graph: GraphPayload
+  onChange: (next: Partial<LabelStyle>) => void
+}) {
+  const properties = React.useMemo(
+    () => getLabelProperties(label, graph),
+    [label, graph]
+  )
+
+  const rows = React.useMemo<NodeTextRow[]>(() => {
+    const existing = new Map(labelStyle.text.map((row) => [row.key, row]))
+    return properties.map(
+      (key) =>
+        existing.get(key) ?? { key, showOnNode: false, showOnHover: false }
+    )
+  }, [properties, labelStyle.text])
+
+  const updateRow = (key: string, update: Partial<NodeTextRow>) => {
+    const next = rows.map((row) =>
+      row.key === key ? { ...row, ...update } : row
+    )
+    onChange({ text: next })
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1">
+        <span className="text-xs text-muted-foreground">Size</span>
+        <NativeSelect
+          value={String(labelStyle.textSize ?? 1)}
+          onChange={(e) => onChange({ textSize: Number(e.target.value) })}
+        >
+          {TEXT_SIZE_PRESETS.map((p) => (
+            <NativeSelectOption key={p.value} value={String(p.value)}>
+              {p.label}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+
+      {properties.length === 0 ? (
+        <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
+          No properties found for nodes in this category yet.
+        </div>
+      ) : (
+        <div className="max-h-64 space-y-2 overflow-y-auto">
+          {rows.map((row) => (
+            <div
+              key={row.key}
+              className="space-y-2 rounded-md border border-border bg-card p-3"
+            >
+              <div className="flex items-start gap-2">
+                <GripVertical className="mt-0.5 size-4 shrink-0 text-muted-foreground/50" />
+                <div className="flex-1 space-y-1.5">
+                  <div className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 font-mono text-xs">
+                    {row.key}
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <Checkbox
+                      aria-label={`Show ${row.key} on node`}
+                      checked={row.showOnNode}
+                      onCheckedChange={(checked) =>
+                        updateRow(row.key, { showOnNode: checked === true })
+                      }
+                    />
+                    <span>Show on node</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <Checkbox
+                      aria-label={`Show ${row.key} on hover`}
+                      checked={row.showOnHover}
+                      onCheckedChange={(checked) =>
+                        updateRow(row.key, { showOnHover: checked === true })
+                      }
+                    />
+                    <span>Show on hover</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RelationshipTextTab({
+  typeName,
+  relStyle,
+  onChange,
+}: {
+  typeName: string
+  relStyle: RelationshipStyle
+  onChange: (next: Partial<RelationshipStyle>) => void
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-end gap-3">
+        <div className="space-y-1">
+          <span className="text-xs text-muted-foreground">Size</span>
+          <NativeSelect
+            value={String(relStyle.textSize ?? 1)}
+            onChange={(e) => onChange({ textSize: Number(e.target.value) })}
+          >
+            {TEXT_SIZE_PRESETS.map((p) => (
+              <NativeSelectOption key={p.value} value={String(p.value)}>
+                {p.label}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </div>
+        <div className="space-y-1">
+          <span className="text-xs text-muted-foreground">Align</span>
+          <div className="flex gap-1">
+            <button
+              type="button"
+              onClick={() => onChange({ textAlign: "above" })}
+              className={`flex size-9 items-center justify-center rounded-md border ${
+                (relStyle.textAlign ?? "above") === "above"
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground hover:bg-accent"
+              }`}
+            >
+              <ArrowUpToLine className="size-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => onChange({ textAlign: "below" })}
+              className={`flex size-9 items-center justify-center rounded-md border ${
+                relStyle.textAlign === "below"
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground hover:bg-accent"
+              }`}
+            >
+              <ArrowDownToLine className="size-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-md border border-border bg-card p-3">
+        <div className="flex items-start gap-2">
+          <GripVertical className="mt-0.5 size-4 shrink-0 text-muted-foreground/50" />
+          <div className="flex-1 space-y-2">
+            <div className="inline-flex items-center rounded-full border border-border bg-muted px-2.5 py-0.5 font-mono text-xs font-medium">
+              {typeName}
+            </div>
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-xs">
+                <Checkbox
+                  checked={relStyle.showLabel ?? false}
+                  onCheckedChange={(checked) =>
+                    onChange({ showLabel: checked === true })
+                  }
+                />
+                <span>Show on relationship</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                <Checkbox
+                  checked={relStyle.showLabelOnHover ?? false}
+                  onCheckedChange={(checked) =>
+                    onChange({ showLabelOnHover: checked === true })
+                  }
+                />
+                <span>Show on hover</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 

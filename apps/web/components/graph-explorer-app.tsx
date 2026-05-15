@@ -39,7 +39,6 @@ import {
 import {
   BadgeInfo,
   ChevronDown,
-  ChevronRight,
   CircleDot,
   Copy,
   Database,
@@ -51,7 +50,6 @@ import {
   Maximize,
   Minimize2,
   Moon,
-  Palette,
   Play,
   Plus,
   RefreshCw,
@@ -65,14 +63,13 @@ import {
 } from "lucide-react"
 import { useTheme } from "next-themes"
 import * as React from "react"
-import { ColorPicker } from "@/components/color-picker"
 import {
   type GraphSelection,
   ReagraphWorkspace,
 } from "@/components/reagraph-workspace"
 import {
-  LabelStylingEditor,
-  RuleStylingPanel,
+  NodeStylingPopoverContent,
+  RelationshipStylingPopoverContent,
 } from "@/components/styling-panel"
 import { authClient } from "@/lib/auth-client"
 import {
@@ -98,6 +95,7 @@ import {
 import {
   DEFAULT_RELATIONSHIP_COLOR,
   emptyStyling,
+  type RelationshipStyle,
   type StylingState,
 } from "@/lib/node-styling"
 import {
@@ -991,7 +989,6 @@ function ExploreLeftPanel({
   onReset: () => void
 }) {
   const [openCategory, setOpenCategory] = React.useState<string | null>(null)
-  const [ruleStylingOpen, setRuleStylingOpen] = React.useState(false)
   const [suggestionsOpen, setSuggestionsOpen] = React.useState(false)
   const [activeSuggestionIndex, setActiveSuggestionIndex] = React.useState(-1)
   const [sidebarTab, setSidebarTab] = React.useState<"nodes" | "relationships">(
@@ -1314,7 +1311,6 @@ function ExploreLeftPanel({
 
             {visibleLabels.map((label) => {
               const hidden = hiddenCategories.includes(label.name)
-              const expanded = openCategory === label.name
               const labelStyle = styling.labelStyles[label.name] ?? { text: [] }
               const displayColor = labelStyle.color ?? label.color
               const sceneCount = inSceneLabelCounts[label.name] ?? 0
@@ -1330,36 +1326,65 @@ function ExploreLeftPanel({
                   className="overflow-hidden rounded-md border border-border bg-background"
                   key={label.name}
                 >
-                  <div className="flex items-center">
-                    <button
-                      aria-expanded={expanded}
-                      className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left hover:bg-accent"
-                      onClick={() =>
-                        setOpenCategory(expanded ? null : label.name)
+                  <div className="flex items-center gap-1 pr-2">
+                    <Popover
+                      open={openCategory === label.name}
+                      onOpenChange={(open) =>
+                        setOpenCategory(open ? label.name : null)
                       }
-                      type="button"
                     >
-                      {expanded ? (
-                        <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-                      ) : (
-                        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
-                      )}
-                      <span
-                        className="size-4 shrink-0 rounded-full"
-                        style={{ backgroundColor: displayColor }}
-                      />
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                        {label.name}
-                      </span>
-                      <span className="text-xs font-semibold text-foreground">
-                        {showCount}
-                      </span>
-                    </button>
+                      <PopoverTrigger asChild>
+                        <button
+                          aria-label={`Edit styling for ${label.name}`}
+                          className="flex size-10 shrink-0 items-center justify-center rounded-md hover:bg-accent"
+                          type="button"
+                        >
+                          <span
+                            className="size-4 rounded-full"
+                            style={{ backgroundColor: displayColor }}
+                          />
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        side="right"
+                        align="start"
+                        className="w-96 p-4"
+                      >
+                        <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          {label.name}
+                        </div>
+                        <NodeStylingPopoverContent
+                          label={label.name}
+                          labelStyle={labelStyle}
+                          baseColor={label.color}
+                          graph={graph}
+                          onChange={(next) =>
+                            updateLabelStyle(label.name, next)
+                          }
+                        />
+                        {styling.labelStyles[label.name] ? (
+                          <Button
+                            className="mt-3 h-7 w-full rounded-md border border-border text-xs text-muted-foreground hover:bg-accent"
+                            onClick={() => resetLabelStyle(label.name)}
+                            type="button"
+                            variant="outline"
+                          >
+                            Reset {label.name} styling
+                          </Button>
+                        ) : null}
+                      </PopoverContent>
+                    </Popover>
+                    <span className="min-w-0 flex-1 truncate py-2 text-sm font-medium">
+                      {label.name}
+                    </span>
+                    <span className="text-xs font-semibold text-foreground">
+                      {showCount}
+                    </span>
                     <Button
                       aria-label={
                         hidden ? `Show ${label.name}` : `Hide ${label.name}`
                       }
-                      className="mr-2 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+                      className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
                       onClick={() => onToggleCategory(label.name)}
                       type="button"
                       variant="ghost"
@@ -1371,61 +1396,9 @@ function ExploreLeftPanel({
                       )}
                     </Button>
                   </div>
-                  {expanded && (
-                    <div className="border-t border-border p-3">
-                      <LabelStylingEditor
-                        label={label.name}
-                        labelStyle={labelStyle}
-                        baseColor={label.color}
-                        graph={graph}
-                        onChange={(next) => updateLabelStyle(label.name, next)}
-                      />
-                      {styling.labelStyles[label.name] ? (
-                        <Button
-                          className="mt-3 h-7 w-full rounded-md border border-border text-xs text-muted-foreground hover:bg-accent"
-                          onClick={() => resetLabelStyle(label.name)}
-                          type="button"
-                          variant="outline"
-                        >
-                          Reset {label.name} styling
-                        </Button>
-                      ) : null}
-                    </div>
-                  )}
                 </div>
               )
             })}
-            <div className="overflow-hidden rounded-md border border-border bg-background">
-              <button
-                aria-expanded={ruleStylingOpen}
-                className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-accent"
-                onClick={() => setRuleStylingOpen((open) => !open)}
-                type="button"
-              >
-                {ruleStylingOpen ? (
-                  <ChevronDown className="size-3.5 text-muted-foreground" />
-                ) : (
-                  <ChevronRight className="size-3.5 text-muted-foreground" />
-                )}
-                <Palette className="size-4 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                  Rule-based styling
-                </span>
-                <span className="text-xs font-semibold text-foreground">
-                  {styling.rules.length}
-                </span>
-              </button>
-              {ruleStylingOpen ? (
-                <div className="border-t border-border p-3">
-                  <RuleStylingPanel
-                    styling={styling}
-                    graph={graph}
-                    onChange={onStylingChange}
-                    framed={false}
-                  />
-                </div>
-              ) : null}
-            </div>
           </div>
         ) : (
           <RelationshipsList
@@ -1498,12 +1471,15 @@ function RelationshipsList({
     })
   }, [schema.relationshipTypes, filter, scope, inSceneTypes])
 
-  const setRelationshipColor = (type: string, color: string) => {
+  const updateRelationshipStyle = (
+    type: string,
+    next: Partial<RelationshipStyle>
+  ) => {
     onStylingChange({
       ...styling,
       relationshipStyles: {
         ...styling.relationshipStyles,
-        [type]: { ...styling.relationshipStyles[type], color },
+        [type]: { ...styling.relationshipStyles[type], ...next },
       },
     })
   }
@@ -1606,8 +1582,8 @@ function RelationshipsList({
                   <div className="flex items-center gap-2 pr-3">
                     <PopoverTrigger asChild>
                       <button
-                        aria-label={`Edit color for ${type.name}`}
-                        className="flex h-10 w-10 shrink-0 items-center justify-center"
+                        aria-label={`Edit styling for ${type.name}`}
+                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md hover:bg-accent"
                         type="button"
                       >
                         <span
@@ -1627,26 +1603,31 @@ function RelationshipsList({
                       ) : null}
                     </div>
                   </div>
-                  <PopoverContent align="start" className="w-72 p-3">
-                    <div className="space-y-3">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                        {type.name}
-                      </div>
-                      <ColorPicker
-                        value={color}
-                        onChange={(hex) => setRelationshipColor(type.name, hex)}
-                      />
-                      {styled ? (
-                        <Button
-                          className="h-7 w-full rounded-md border border-border text-xs text-muted-foreground hover:bg-accent"
-                          onClick={() => resetRelationshipStyle(type.name)}
-                          type="button"
-                          variant="outline"
-                        >
-                          Reset {type.name} styling
-                        </Button>
-                      ) : null}
+                  <PopoverContent
+                    side="right"
+                    align="start"
+                    className="w-96 p-4"
+                  >
+                    <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      {type.name}
                     </div>
+                    <RelationshipStylingPopoverContent
+                      typeName={type.name}
+                      relStyle={styled ?? {}}
+                      onChange={(next) =>
+                        updateRelationshipStyle(type.name, next)
+                      }
+                    />
+                    {styled ? (
+                      <Button
+                        className="mt-3 h-7 w-full rounded-md border border-border text-xs text-muted-foreground hover:bg-accent"
+                        onClick={() => resetRelationshipStyle(type.name)}
+                        type="button"
+                        variant="outline"
+                      >
+                        Reset {type.name} styling
+                      </Button>
+                    ) : null}
                   </PopoverContent>
                 </Popover>
               </div>
