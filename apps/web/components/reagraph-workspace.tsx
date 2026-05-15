@@ -7,7 +7,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import { EyeOff, Loader2, Maximize } from "lucide-react"
+import { ChevronRight, EyeOff, Loader2, Maximize } from "lucide-react"
 import dynamic from "next/dynamic"
 import { useTheme } from "next-themes"
 import * as React from "react"
@@ -23,7 +23,11 @@ import {
 } from "reagraph"
 import { CanvasTexture, LinearFilter, type Texture } from "three"
 
-import type { GraphNodeRecord, GraphPayload } from "@/lib/graph-types"
+import type {
+  GraphNodeRecord,
+  GraphPayload,
+  NodeRelationshipSummary,
+} from "@/lib/graph-types"
 import {
   emptyStyling,
   getRelationshipColor,
@@ -54,6 +58,11 @@ export type GraphSelection =
     }
   | null
 
+export type ExpandNodeOptions = {
+  relType?: string
+  direction?: "incoming" | "outgoing" | "both"
+}
+
 type ReagraphWorkspaceProps = {
   graph: GraphPayload
   canvasKey?: string | number
@@ -64,7 +73,10 @@ type ReagraphWorkspaceProps = {
   isLoading?: boolean
   isExpanding?: boolean
   onSelect: (selection: GraphSelection) => void
-  onExpandNode: (nodeId: string) => void
+  onExpandNode: (nodeId: string, options?: ExpandNodeOptions) => void
+  onFetchRelationshipSummary?: (
+    nodeId: string
+  ) => Promise<NodeRelationshipSummary>
   onHideId?: (id: string) => void
 }
 
@@ -79,6 +91,7 @@ export function ReagraphWorkspace({
   isExpanding = false,
   onSelect,
   onExpandNode,
+  onFetchRelationshipSummary,
   onHideId,
 }: ReagraphWorkspaceProps) {
   const canvasRef = React.useRef<GraphCanvasRef>(null)
@@ -273,17 +286,22 @@ export function ReagraphWorkspace({
   const prevExpandingRef = React.useRef(isExpanding)
 
   const handleExpandNode = React.useCallback(
-    (nodeId: string) => {
+    (nodeId: string, options?: ExpandNodeOptions) => {
       pendingFocusRef.current = nodeId
-      onExpandNode(nodeId)
+      onExpandNode(nodeId, options)
     },
     [onExpandNode]
   )
 
   const handleContextMenu = React.useCallback(
     (event: ContextMenuEvent) =>
-      renderContextMenu(event, handleExpandNode, onHideId),
-    [handleExpandNode, onHideId]
+      renderContextMenu(
+        event,
+        handleExpandNode,
+        onFetchRelationshipSummary,
+        onHideId
+      ),
+    [handleExpandNode, onFetchRelationshipSummary, onHideId]
   )
 
   React.useEffect(() => {
@@ -313,7 +331,7 @@ export function ReagraphWorkspace({
       ref={wrapperRef}
     >
       <GraphCanvasErrorBoundary
-        key={canvasKey}
+        key={`${canvasKey}-${mode}`}
         fallback={
           <StaticGraphFallback
             graph={graph}
@@ -325,14 +343,14 @@ export function ReagraphWorkspace({
         }
       >
         <GraphCanvas
-          key={canvasKey}
+          key={`${canvasKey}-${mode}`}
           ref={canvasRef}
           nodes={nodes}
           edges={edges}
           theme={graphTheme}
           layoutType={mode === "3d" ? "forceDirected3d" : "forceDirected2d"}
           layoutOverrides={layoutOverrides}
-          cameraMode={mode === "3d" ? "orbit" : "orthographic"}
+          cameraMode={mode === "3d" ? "rotate" : "orthographic"}
           selections={selections}
           draggable
           animated
@@ -537,7 +555,10 @@ function truncateForCircle(text: string, size: number): string {
 
 function renderContextMenu(
   event: ContextMenuEvent,
-  onExpandNode: (nodeId: string) => void,
+  onExpandNode: (nodeId: string, options?: ExpandNodeOptions) => void,
+  onFetchRelationshipSummary?: (
+    nodeId: string
+  ) => Promise<NodeRelationshipSummary>,
   onHideId?: (id: string) => void
 ) {
   const isEdge = "source" in event.data
@@ -550,17 +571,12 @@ function renderContextMenu(
       <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
         Node actions
       </div>
-      <button
-        className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground"
-        type="button"
-        onClick={() => {
-          onExpandNode(nodeId)
-          event.onClose()
-        }}
-      >
-        <Maximize className="size-3.5 shrink-0" />
-        Expand
-      </button>
+      <ExpandMenuItem
+        nodeId={nodeId}
+        onExpandNode={onExpandNode}
+        onFetchRelationshipSummary={onFetchRelationshipSummary}
+        onCloseMenu={event.onClose}
+      />
       {onHideId && (
         <button
           className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground"
@@ -580,6 +596,205 @@ function renderContextMenu(
         </button>
       )}
     </GraphContextMenu>
+  )
+}
+
+function ExpandMenuItem({
+  nodeId,
+  onExpandNode,
+  onFetchRelationshipSummary,
+  onCloseMenu,
+}: {
+  nodeId: string
+  onExpandNode: (nodeId: string, options?: ExpandNodeOptions) => void
+  onFetchRelationshipSummary?: (
+    nodeId: string
+  ) => Promise<NodeRelationshipSummary>
+  onCloseMenu: () => void
+}) {
+  const [isSubmenuOpen, setIsSubmenuOpen] = React.useState(false)
+  const [summary, setSummary] = React.useState<NodeRelationshipSummary | null>(
+    null
+  )
+  const [isLoading, setIsLoading] = React.useState(false)
+  const [hasError, setHasError] = React.useState(false)
+  const closeTimerRef = React.useRef<number | null>(null)
+  const hasFetchedRef = React.useRef(false)
+
+  const cancelClose = React.useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
+  }, [])
+
+  const scheduleClose = React.useCallback(() => {
+    cancelClose()
+    closeTimerRef.current = window.setTimeout(() => {
+      setIsSubmenuOpen(false)
+    }, 120)
+  }, [cancelClose])
+
+  const openSubmenu = React.useCallback(() => {
+    cancelClose()
+    setIsSubmenuOpen(true)
+
+    if (hasFetchedRef.current || !onFetchRelationshipSummary || isLoading) {
+      return
+    }
+
+    hasFetchedRef.current = true
+    setIsLoading(true)
+    setHasError(false)
+
+    onFetchRelationshipSummary(nodeId)
+      .then((result) => {
+        setSummary(result)
+      })
+      .catch(() => {
+        setHasError(true)
+      })
+      .finally(() => {
+        setIsLoading(false)
+      })
+  }, [cancelClose, isLoading, nodeId, onFetchRelationshipSummary])
+
+  React.useEffect(() => () => cancelClose(), [cancelClose])
+
+  const supportsSubmenu = Boolean(onFetchRelationshipSummary)
+
+  return (
+    <div
+      className="relative"
+      onPointerEnter={supportsSubmenu ? openSubmenu : undefined}
+      onPointerLeave={supportsSubmenu ? scheduleClose : undefined}
+    >
+      <button
+        className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground data-[open=true]:bg-accent data-[open=true]:text-accent-foreground"
+        data-open={supportsSubmenu && isSubmenuOpen ? "true" : "false"}
+        type="button"
+        onClick={() => {
+          if (!supportsSubmenu) {
+            onExpandNode(nodeId)
+            onCloseMenu()
+          }
+        }}
+      >
+        <span className="flex items-center gap-2">
+          <Maximize className="size-3.5 shrink-0" />
+          Expand
+        </span>
+        {supportsSubmenu && (
+          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+        )}
+      </button>
+      {supportsSubmenu && isSubmenuOpen && (
+        <ExpandSubmenu
+          nodeId={nodeId}
+          summary={summary}
+          isLoading={isLoading}
+          hasError={hasError}
+          onExpandNode={onExpandNode}
+          onCloseMenu={onCloseMenu}
+          onPointerEnter={cancelClose}
+          onPointerLeave={scheduleClose}
+        />
+      )}
+    </div>
+  )
+}
+
+function ExpandSubmenu({
+  nodeId,
+  summary,
+  isLoading,
+  hasError,
+  onExpandNode,
+  onCloseMenu,
+  onPointerEnter,
+  onPointerLeave,
+}: {
+  nodeId: string
+  summary: NodeRelationshipSummary | null
+  isLoading: boolean
+  hasError: boolean
+  onExpandNode: (nodeId: string, options?: ExpandNodeOptions) => void
+  onCloseMenu: () => void
+  onPointerEnter: () => void
+  onPointerLeave: () => void
+}) {
+  const entries = summary?.entries ?? []
+  const total = summary?.total ?? 0
+  const totalLabel = total === 1 ? "(1 node)" : `(${total} nodes)`
+
+  return (
+    <div
+      className="absolute top-0 left-full z-20 ml-1 min-w-60 overflow-hidden rounded-md border border-border bg-popover p-1 shadow-md"
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
+    >
+      <button
+        className="flex w-full cursor-pointer items-center justify-between gap-4 rounded-sm px-2 py-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
+        type="button"
+        disabled={isLoading && total === 0}
+        onClick={() => {
+          onExpandNode(nodeId)
+          onCloseMenu()
+        }}
+      >
+        <span>All</span>
+        <span className="text-xs text-muted-foreground">
+          {isLoading && total === 0 ? "…" : totalLabel}
+        </span>
+      </button>
+      <div className="my-1 h-px bg-border" />
+      {isLoading && entries.length === 0 && (
+        <div className="px-2 py-2 text-xs text-muted-foreground">
+          Loading relationships…
+        </div>
+      )}
+      {!isLoading && hasError && (
+        <div className="px-2 py-2 text-xs text-muted-foreground">
+          Could not load relationships
+        </div>
+      )}
+      {!isLoading && !hasError && entries.length === 0 && summary && (
+        <div className="px-2 py-2 text-xs text-muted-foreground">
+          No relationships
+        </div>
+      )}
+      {entries.map((entry) => {
+        const key = `${entry.direction}:${entry.type}`
+        const arrowLeft = entry.direction === "incoming" ? "←" : "—"
+        const arrowRight = entry.direction === "outgoing" ? "→" : "—"
+        const countLabel =
+          entry.nodeCount === 1 ? "(1 node)" : `(${entry.nodeCount} nodes)`
+
+        return (
+          <button
+            key={key}
+            className="flex w-full cursor-pointer items-center justify-between gap-4 rounded-sm px-2 py-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground"
+            type="button"
+            onClick={() => {
+              onExpandNode(nodeId, {
+                relType: entry.type,
+                direction: entry.direction,
+              })
+              onCloseMenu()
+            }}
+          >
+            <span className="flex min-w-0 items-center gap-2 font-mono text-xs">
+              <span className="text-muted-foreground">{arrowLeft}</span>
+              <span className="truncate">{entry.type}</span>
+              <span className="text-muted-foreground">{arrowRight}</span>
+            </span>
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {countLabel}
+            </span>
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
@@ -676,7 +891,7 @@ function GraphContextMenu({
 
   return (
     <div
-      className="min-w-40 overflow-hidden rounded-md border border-border bg-popover p-1 shadow-md"
+      className="min-w-40 rounded-md border border-border bg-popover p-1 shadow-md"
       ref={menuRef}
     >
       {children}

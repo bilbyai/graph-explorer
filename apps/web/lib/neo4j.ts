@@ -10,6 +10,7 @@ import type {
   GraphPayload,
   GraphRelationshipRecord,
   GraphSearchSuggestion,
+  NodeRelationshipSummary,
   QueryResultPayload,
   SchemaPayload,
 } from "@/lib/graph-types"
@@ -340,7 +341,8 @@ export async function expandGraph(
   connection: AdminConnection,
   nodeId: string,
   direction: "incoming" | "outgoing" | "both",
-  limit = 80
+  limit = 80,
+  relType?: string
 ) {
   const pattern =
     direction === "incoming"
@@ -349,9 +351,45 @@ export async function expandGraph(
         ? "(n)-[r]->(m)"
         : "(n)-[r]-(m)"
 
+  const typeFilter = relType ? " AND type(r) = $relType" : ""
+  const params: QueryParams = { nodeId, limit: neo4j.int(limit) }
+
+  if (relType) {
+    params.relType = relType
+  }
+
   return runReadQuery(
     connection,
-    `MATCH ${pattern} WHERE elementId(n) = $nodeId RETURN n, r, m LIMIT $limit`,
-    { nodeId, limit: neo4j.int(limit) }
+    `MATCH ${pattern} WHERE elementId(n) = $nodeId${typeFilter} RETURN n, r, m LIMIT $limit`,
+    params
   )
+}
+
+export async function getNodeRelationshipSummary(
+  connection: AdminConnection,
+  nodeId: string
+): Promise<NodeRelationshipSummary> {
+  const result = await runReadQuery(
+    connection,
+    `MATCH (n)-[r]-(m)
+WHERE elementId(n) = $nodeId
+WITH type(r) AS relType,
+     CASE WHEN startNode(r) = n THEN 'outgoing' ELSE 'incoming' END AS direction,
+     m
+RETURN relType, direction, count(DISTINCT m) AS nodeCount
+ORDER BY relType, direction`,
+    { nodeId }
+  )
+
+  const entries = result.rows.map((row) => ({
+    type: String(row.relType),
+    direction:
+      row.direction === "outgoing"
+        ? ("outgoing" as const)
+        : ("incoming" as const),
+    nodeCount: Number(row.nodeCount ?? 0),
+  }))
+  const total = entries.reduce((sum, entry) => sum + entry.nodeCount, 0)
+
+  return { total, entries }
 }

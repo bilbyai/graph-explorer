@@ -12,6 +12,7 @@ const requestSchema = z.object({
   nodeId: z.string().min(1),
   direction: z.enum(["incoming", "outgoing", "both"]).default("both"),
   limit: z.number().int().min(1).max(300).default(80),
+  relType: z.string().min(1).optional(),
 })
 
 export async function POST(request: Request) {
@@ -42,7 +43,8 @@ export async function POST(request: Request) {
       connection,
       body.data.nodeId,
       body.data.direction,
-      body.data.limit
+      body.data.limit,
+      body.data.relType
     )
 
     return Response.json(result.graph)

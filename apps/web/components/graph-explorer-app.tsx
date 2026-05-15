@@ -73,6 +73,7 @@ import {
 import { authClient } from "@/lib/auth-client"
 import {
   expandLocalGraph,
+  getLocalNodeRelationshipSummary,
   readLocalSchema,
   runLocalReadQuery,
   searchLocalGraph,
@@ -82,6 +83,7 @@ import { validateReadOnlyMatchQuery } from "@/lib/cypher"
 import type {
   GraphPayload,
   GraphSearchSuggestion,
+  NodeRelationshipSummary,
   QueryResultPayload,
   SchemaPayload,
 } from "@/lib/graph-types"
@@ -536,36 +538,47 @@ export function GraphExplorerApp({
     void loadGraph(selectedConnection, "")
   }, [loadGraph, loadSchema, selectedConnection])
 
-  async function expandNode(nodeId: string) {
+  async function expandNode(
+    nodeId: string,
+    options: {
+      relType?: string
+      direction?: "incoming" | "outgoing" | "both"
+    } = {}
+  ) {
     if (selectedConnection.source === "sample") {
       setStatus("Sample graph expansion is already loaded")
       return
     }
 
+    const direction = options.direction ?? "both"
+    const relType = options.relType
+    const expansionLabel = relType ? `${relType} neighborhood` : "neighborhood"
+
     setIsGraphExpanding(true)
     try {
       if (selectedConnection.source === "local") {
-        setStatus("Expanding local neighborhood from this browser")
+        setStatus(`Expanding local ${expansionLabel} from this browser`)
 
         try {
           const expandedGraph = await expandLocalGraph(
             selectedConnection,
             nodeId,
-            "both",
-            120
+            direction,
+            120,
+            relType
           )
 
           setGraph((currentGraph) =>
             mergeGraphs(currentGraph, expandedGraph.graph)
           )
-          setStatus("Local neighborhood expanded")
+          setStatus(`Local ${expansionLabel} expanded`)
         } catch {
           setStatus("Local graph expansion failed")
         }
         return
       }
 
-      setStatus("Expanding neighborhood")
+      setStatus(`Expanding ${expansionLabel}`)
 
       try {
         const response = await fetch("/api/explore/expand", {
@@ -576,20 +589,96 @@ export function GraphExplorerApp({
           body: JSON.stringify({
             connectionId: selectedConnection.id,
             nodeId,
-            direction: "both",
+            direction,
             limit: 120,
+            relType,
           }),
         })
         const expandedGraph = (await response.json()) as GraphPayload
 
         setGraph((currentGraph) => mergeGraphs(currentGraph, expandedGraph))
-        setStatus("Neighborhood expanded")
+        const capitalLabel =
+          expansionLabel.charAt(0).toUpperCase() + expansionLabel.slice(1)
+        setStatus(`${capitalLabel} expanded`)
       } catch {
         setStatus("Expansion failed")
       }
     } finally {
       setIsGraphExpanding(false)
     }
+  }
+
+  async function fetchNodeRelationshipSummary(
+    nodeId: string
+  ): Promise<NodeRelationshipSummary> {
+    if (selectedConnection.source === "sample") {
+      const buckets = new Map<
+        string,
+        {
+          nodeIds: Set<string>
+          type: string
+          direction: "incoming" | "outgoing"
+        }
+      >()
+
+      for (const relationship of graph.relationships) {
+        if (relationship.source === nodeId) {
+          const key = `outgoing:${relationship.type}`
+          const bucket = buckets.get(key) ?? {
+            nodeIds: new Set(),
+            type: relationship.type,
+            direction: "outgoing" as const,
+          }
+          bucket.nodeIds.add(relationship.target)
+          buckets.set(key, bucket)
+        } else if (relationship.target === nodeId) {
+          const key = `incoming:${relationship.type}`
+          const bucket = buckets.get(key) ?? {
+            nodeIds: new Set(),
+            type: relationship.type,
+            direction: "incoming" as const,
+          }
+          bucket.nodeIds.add(relationship.source)
+          buckets.set(key, bucket)
+        }
+      }
+
+      const entries = Array.from(buckets.values())
+        .map((bucket) => ({
+          type: bucket.type,
+          direction: bucket.direction,
+          nodeCount: bucket.nodeIds.size,
+        }))
+        .sort((a, b) =>
+          a.type === b.type
+            ? a.direction.localeCompare(b.direction)
+            : a.type.localeCompare(b.type)
+        )
+
+      return {
+        total: entries.reduce((sum, entry) => sum + entry.nodeCount, 0),
+        entries,
+      }
+    }
+
+    if (selectedConnection.source === "local") {
+      return getLocalNodeRelationshipSummary(selectedConnection, nodeId)
+    }
+
+    const response = await fetch("/api/explore/relationship-summary", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        connectionId: selectedConnection.id,
+        nodeId,
+      }),
+    })
+
+    if (!response.ok) {
+      return { total: 0, entries: [] }
+    }
+
+    return (await response.json()) as NodeRelationshipSummary
   }
 
   function expandSelected() {
@@ -779,7 +868,10 @@ export function GraphExplorerApp({
               isLoading={isGraphLoading}
               isExpanding={isGraphExpanding}
               onSelect={setSelection}
-              onExpandNode={(nodeId) => void expandNode(nodeId)}
+              onExpandNode={(nodeId, options) =>
+                void expandNode(nodeId, options)
+              }
+              onFetchRelationshipSummary={fetchNodeRelationshipSummary}
               onHideId={hideId}
             />
           </section>

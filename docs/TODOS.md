@@ -4,3 +4,4 @@
 - [x] add a dismiss feature (hide ⌘ h)
 - [ ] add multi-select. ctrl a + ctrl a - to select everything, and then a way to cmd+h to hide everything for example. Basically good context menu options for context menu when multiselect.
 - [ ] expand based on "relationship". So in the original neo4j, there is a submenu in the dropdown.
+- [ ] I want search to work

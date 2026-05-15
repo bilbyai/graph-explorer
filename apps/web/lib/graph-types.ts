@@ -39,6 +39,19 @@ export type QueryResultPayload = {
   }
 }
 
+export type RelationshipDirection = "incoming" | "outgoing"
+
+export type NodeRelationshipSummaryEntry = {
+  type: string
+  direction: RelationshipDirection
+  nodeCount: number
+}
+
+export type NodeRelationshipSummary = {
+  total: number
+  entries: NodeRelationshipSummaryEntry[]
+}
+
 export type SchemaPayload = {
   labels: Array<{
     name: string
