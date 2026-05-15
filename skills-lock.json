@@ -31,6 +31,13 @@
       "skillPath": "better-auth/organization/SKILL.md",
       "computedHash": "79a5a85b43d10e9fe37582b3506b051a33a991817b938f349099baa5ddba21aa"
     },
+    "reagraph": {
+      "source": "reaviz/skills",
+      "ref": "master",
+      "sourceType": "github",
+      "skillPath": "reagraph/SKILL.md",
+      "computedHash": "fc5a7c36a433c3b15763e68cc0e828e236e333e4f9075e180e59eedfe519af79"
+    },
     "two-factor-authentication-best-practices": {
       "source": "better-auth/skills",
       "sourceType": "github",
