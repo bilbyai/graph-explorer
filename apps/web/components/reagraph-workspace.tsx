@@ -2,12 +2,25 @@
 
 import { Button } from "@workspace/ui/components/button"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@workspace/ui/components/dialog"
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import { ChevronRight, EyeOff, Loader2, Maximize } from "lucide-react"
+import {
+  BadgeInfo,
+  ChevronRight,
+  EyeOff,
+  Loader2,
+  Maximize,
+} from "lucide-react"
 import dynamic from "next/dynamic"
 import { useTheme } from "next-themes"
 import * as React from "react"
@@ -27,6 +40,7 @@ import { IconCenterBox, IconFitBox } from "@/assets/icons"
 import type {
   GraphNodeRecord,
   GraphPayload,
+  GraphRelationshipRecord,
   NodeRelationshipSummary,
 } from "@/lib/graph-types"
 import {
@@ -206,14 +220,26 @@ export function ReagraphWorkspace({
     [selected]
   )
   const visibleSelectionIds = React.useMemo(
-    () => [...nodes.map((node) => node.id), ...edges.map((edge) => edge.id)],
-    [nodes, edges]
+    () => nodes.map((node) => node.id),
+    [nodes]
   )
   const layoutOverrides = React.useMemo(
     () => ({ nodeStrength: -600, linkDistance: 140 }),
     []
   )
   const [mode, setMode] = React.useState<"2d" | "3d">("2d")
+  const [inspectedRelationshipId, setInspectedRelationshipId] = React.useState<
+    string | null
+  >(null)
+  const inspectedRelationship = React.useMemo(
+    () =>
+      inspectedRelationshipId
+        ? (graph.relationships.find(
+            (relationship) => relationship.id === inspectedRelationshipId
+          ) ?? null)
+        : null,
+    [graph.relationships, inspectedRelationshipId]
+  )
 
   const wrapperRef = React.useRef<HTMLDivElement>(null)
   const hoverCardRef = React.useRef<HTMLDivElement>(null)
@@ -393,8 +419,19 @@ export function ReagraphWorkspace({
     [onSelect, toggleSelectionId]
   )
 
+  const handleInspectRelationship = React.useCallback(
+    (relationshipId: string) => {
+      onSelect({ type: "relationship", id: relationshipId })
+      setHoveredNode(null)
+      setInspectedRelationshipId(relationshipId)
+    },
+    [onSelect]
+  )
+
   const handleLassoEnd = React.useCallback(
-    (ids: string[]) => {
+    (ids?: string[]) => {
+      if (!Array.isArray(ids)) return
+
       onSelect(getSelectionFromVisibleIds(ids))
       setHoveredNode(null)
     },
@@ -425,9 +462,15 @@ export function ReagraphWorkspace({
         event,
         handleExpandNode,
         onFetchRelationshipSummary,
-        onHideId
+        onHideId,
+        handleInspectRelationship
       ),
-    [handleExpandNode, onFetchRelationshipSummary, onHideId]
+    [
+      handleExpandNode,
+      handleInspectRelationship,
+      onFetchRelationshipSummary,
+      onHideId,
+    ]
   )
 
   React.useEffect(() => {
@@ -538,6 +581,22 @@ export function ReagraphWorkspace({
         </div>
       )}
       {hoveredNode && <NodeHoverCard node={hoveredNode} ref={hoverCardRef} />}
+      {inspectedRelationship && (
+        <RelationshipInspectDialog
+          relationship={inspectedRelationship}
+          sourceNode={
+            graph.nodes.find(
+              (node) => node.id === inspectedRelationship.source
+            ) ?? null
+          }
+          targetNode={
+            graph.nodes.find(
+              (node) => node.id === inspectedRelationship.target
+            ) ?? null
+          }
+          onClose={() => setInspectedRelationshipId(null)}
+        />
+      )}
       <TooltipProvider delayDuration={150}>
         <div className="absolute top-3 left-3 flex items-center gap-0.5 rounded-md border border-border bg-muted/90 p-0.5 text-xs shadow-md">
           <Button
@@ -730,10 +789,29 @@ function renderContextMenu(
   onFetchRelationshipSummary?: (
     nodeId: string
   ) => Promise<NodeRelationshipSummary>,
-  onHideId?: (id: string) => void
+  onHideId?: (id: string) => void,
+  onInspectRelationship?: (relationshipId: string) => void
 ) {
   const isEdge = "source" in event.data
-  if (isEdge) return null
+  if (isEdge) {
+    const relationshipId = event.data.id
+
+    return (
+      <GraphContextMenu onClose={event.onClose}>
+        <button
+          className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground"
+          type="button"
+          onClick={() => {
+            onInspectRelationship?.(relationshipId)
+            event.onClose()
+          }}
+        >
+          <BadgeInfo className="size-3.5 shrink-0" />
+          Inspect
+        </button>
+      </GraphContextMenu>
+    )
+  }
 
   const nodeId = event.data.id
 
@@ -768,6 +846,154 @@ function renderContextMenu(
       )}
     </GraphContextMenu>
   )
+}
+
+function RelationshipInspectDialog({
+  relationship,
+  sourceNode,
+  targetNode,
+  onClose,
+}: {
+  relationship: GraphRelationshipRecord
+  sourceNode: GraphNodeRecord | null
+  targetNode: GraphNodeRecord | null
+  onClose: () => void
+}) {
+  const propertyEntries = Object.entries(relationship.properties)
+
+  return (
+    <Dialog open onOpenChange={(open) => (!open ? onClose() : undefined)}>
+      <DialogContent className="max-h-[calc(100svh-2rem)] w-[min(calc(100vw-2rem),56rem)] !max-w-none overflow-hidden border border-border bg-card p-0 text-foreground">
+        <DialogHeader className="border-b border-border px-6 pt-6 pb-4">
+          <DialogTitle className="font-mono text-xl font-semibold tracking-normal">
+            {relationship.type}
+          </DialogTitle>
+          <DialogDescription className="break-all">
+            {relationship.source} {"->"} {relationship.target}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid max-h-[calc(100svh-8rem)] gap-6 overflow-y-auto px-6 pb-6 text-sm">
+          <section className="space-y-3">
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Relationship Properties
+            </div>
+            {propertyEntries.length > 0 ? (
+              <PropertyGrid properties={relationship.properties} />
+            ) : (
+              <p className="text-sm italic text-muted-foreground">
+                This relationship has no properties.
+              </p>
+            )}
+          </section>
+
+          <section className="space-y-3">
+            <EntitySummaryCard
+              fallbackId={relationship.source}
+              node={sourceNode}
+            />
+            <div className="grid grid-cols-[5rem_minmax(0,1fr)] items-center gap-4 px-2 sm:grid-cols-[10rem_minmax(0,1fr)]">
+              <div className="flex justify-center">
+                <div className="h-16 w-px bg-border" />
+              </div>
+              <div className="font-mono text-sm text-muted-foreground">
+                {relationship.type}
+              </div>
+            </div>
+            <EntitySummaryCard
+              fallbackId={relationship.target}
+              node={targetNode}
+            />
+          </section>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function EntitySummaryCard({
+  node,
+  fallbackId,
+}: {
+  node: GraphNodeRecord | null
+  fallbackId: string
+}) {
+  const primaryLabel = node?.labels[0] ?? "Node"
+  const title = node?.caption || fallbackId
+  const properties = node?.properties ?? {}
+
+  return (
+    <article className="grid overflow-hidden rounded-md border border-border bg-background sm:grid-cols-[12rem_minmax(0,1fr)]">
+      <div className="flex min-w-0 flex-col justify-center gap-3 border-b border-border p-4 sm:border-r sm:border-b-0">
+        <div className="break-words text-base font-medium">{title}</div>
+        <div className="w-fit rounded-full bg-primary/15 px-2.5 py-1 text-xs font-semibold text-primary">
+          {primaryLabel}
+        </div>
+      </div>
+      <div className="min-w-0 p-4">
+        <PropertyGrid
+          fallbackRows={{
+            Id: fallbackId,
+            Labels: node?.labels.join(", ") ?? "",
+          }}
+          maxEntries={6}
+          properties={properties}
+        />
+      </div>
+    </article>
+  )
+}
+
+function PropertyGrid({
+  properties,
+  fallbackRows,
+  maxEntries,
+}: {
+  properties: Record<string, unknown>
+  fallbackRows?: Record<string, string>
+  maxEntries?: number
+}) {
+  const entries = Object.entries(properties)
+  const visibleEntries =
+    typeof maxEntries === "number" ? entries.slice(0, maxEntries) : entries
+  const rows = [
+    ...Object.entries(fallbackRows ?? {}).filter(([, value]) => value),
+    ...visibleEntries.map(([key, value]) => [key, formatPropertyValue(value)]),
+  ]
+
+  if (rows.length === 0) {
+    return (
+      <div className="text-sm italic text-muted-foreground">No properties.</div>
+    )
+  }
+
+  return (
+    <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[10rem_minmax(0,1fr)]">
+      {rows.map(([key, value]) => (
+        <React.Fragment key={key}>
+          <dt className="min-w-0 truncate font-semibold text-foreground">
+            {key}
+          </dt>
+          <dd className="min-w-0 break-words font-mono text-muted-foreground">
+            {value}
+          </dd>
+        </React.Fragment>
+      ))}
+    </dl>
+  )
+}
+
+function formatPropertyValue(value: unknown): string {
+  if (value === null) return "null"
+  if (typeof value === "string") return value
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value)
+  }
+
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
 }
 
 function ExpandMenuItem({
