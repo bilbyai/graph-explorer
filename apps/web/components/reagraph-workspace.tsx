@@ -225,10 +225,21 @@ export function ReagraphWorkspace({
 
   const getSelectionFromVisibleIds = React.useCallback(
     (ids: string[]): GraphSelection => {
-      if (ids.length === 0) return null
-      if (ids.length > 1) return { type: "multi", ids }
+      const seen = new Set<string>()
+      const visibleIds = ids.filter((id) => {
+        if (seen.has(id)) return false
+        if (!visibleNodeIds.has(id) && !visibleRelationshipIds.has(id)) {
+          return false
+        }
 
-      const id = ids[0]
+        seen.add(id)
+        return true
+      })
+
+      if (visibleIds.length === 0) return null
+      if (visibleIds.length > 1) return { type: "multi", ids: visibleIds }
+
+      const id = visibleIds[0]
       if (!id) return null
 
       if (visibleNodeIds.has(id)) {
@@ -382,6 +393,14 @@ export function ReagraphWorkspace({
     [onSelect, toggleSelectionId]
   )
 
+  const handleLassoEnd = React.useCallback(
+    (ids: string[]) => {
+      onSelect(getSelectionFromVisibleIds(ids))
+      setHoveredNode(null)
+    },
+    [getSelectionFromVisibleIds, onSelect]
+  )
+
   const handleNodePointerOver = React.useCallback((node: InternalGraphNode) => {
     const data = (node.data ?? null) as GraphNodeRecord | null
     setHoveredNode(data)
@@ -491,6 +510,7 @@ export function ReagraphWorkspace({
           maxZoom={80}
           renderNode={mode === "3d" ? undefined : renderNode}
           contextMenu={handleContextMenu}
+          onLassoEnd={handleLassoEnd}
           onCanvasClick={handleCanvasClick}
           onNodeClick={handleNodeClick}
           onEdgeClick={handleEdgeClick}
