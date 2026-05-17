@@ -268,6 +268,7 @@ export async function searchLocalGraph(
   limit = 80
 ) {
   const trimmedSearch = search.trim().toLowerCase()
+  const terms = getSearchTerms(trimmedSearch)
 
   if (!trimmedSearch) {
     return runLocalReadQuery(connection, "MATCH (n) RETURN n LIMIT $limit", {
@@ -280,20 +281,64 @@ export async function searchLocalGraph(
     trimmedSearch,
     limit
   )
-
-  if (fullTextResult?.graph.nodes.length) {
-    return fullTextResult
-  }
-
-  return runLocalReadQuery(
+  const propertyResult = await searchLocalPropertyValues(
     connection,
-    `MATCH (n)
-WHERE any(label IN labels(n) WHERE toLower(label) CONTAINS $search)
-  OR any(key IN keys(n) WHERE toLower(toString(n[key])) CONTAINS $search)
-RETURN n
-LIMIT $limit`,
-    { search: trimmedSearch, limit: neo4j.int(limit) }
+    trimmedSearch,
+    terms,
+    limit
   )
+
+  return mergeNodeSearchResults(fullTextResult, propertyResult, limit)
+}
+
+async function searchLocalPropertyValues(
+  connection: LocalConnection,
+  search: string,
+  terms: string[],
+  limit: number
+) {
+  try {
+    return await runLocalReadQuery(
+      connection,
+      `WITH $terms AS terms, $collapsedSearch AS collapsedSearch
+MATCH (n)
+WITH n,
+  [label IN labels(n) | toLower(label)] AS labels,
+  [key IN keys(n) | toLower(toString(n[key]))] AS values,
+  terms,
+  collapsedSearch
+WHERE any(label IN labels WHERE label CONTAINS $search)
+  OR any(label IN labels WHERE any(term IN terms WHERE label CONTAINS term))
+  OR any(value IN values WHERE value IS NOT NULL AND any(term IN terms WHERE value CONTAINS term))
+  OR any(value IN values WHERE value IS NOT NULL AND replace(value, ' ', '') CONTAINS collapsedSearch)
+WITH n,
+  CASE
+    WHEN any(value IN values WHERE value IS NOT NULL AND value CONTAINS $search) THEN 4
+    WHEN any(value IN values WHERE value IS NOT NULL AND replace(value, ' ', '') CONTAINS collapsedSearch) THEN 3
+    WHEN any(value IN values WHERE value IS NOT NULL AND all(term IN terms WHERE value CONTAINS term)) THEN 2
+    ELSE 1
+  END AS matchRank,
+  reduce(hitCount = 0, term IN terms |
+    hitCount + CASE
+      WHEN any(label IN labels WHERE label CONTAINS term)
+        OR any(value IN values WHERE value IS NOT NULL AND value CONTAINS term)
+      THEN 1
+      ELSE 0
+    END
+  ) AS termHits
+RETURN n
+ORDER BY matchRank DESC, termHits DESC
+LIMIT $limit`,
+      {
+        search,
+        terms,
+        collapsedSearch: collapseSearchValue(search),
+        limit: neo4j.int(limit),
+      }
+    )
+  } catch {
+    return null
+  }
 }
 
 async function searchLocalFullTextNodeIndexes(
@@ -338,16 +383,71 @@ LIMIT $limit`,
 }
 
 function createFullTextSearchQuery(search: string) {
-  const terms = search
-    .split(/\s+/)
-    .map((term) => term.replace(/[+\-&|!(){}[\]^"~*?:\\/]/g, "\\$&"))
-    .filter(Boolean)
+  const terms = getSearchTerms(search).map((term) =>
+    term.replace(/[+\-&|!(){}[\]^"~*?:\\/]/g, "\\$&")
+  )
 
   if (terms.length === 0) {
     return search
   }
 
-  return terms.map((term) => `${term}*`).join(" AND ")
+  return terms.map((term) => `${term}*`).join(" OR ")
+}
+
+function getSearchTerms(search: string) {
+  return search.split(/\s+/).filter(Boolean)
+}
+
+function collapseSearchValue(search: string) {
+  return search.replace(/\s+/g, "")
+}
+
+function mergeNodeSearchResults(
+  primary: QueryResultPayload | null,
+  secondary: QueryResultPayload | null,
+  limit: number
+) {
+  if (!primary) {
+    return (
+      secondary ?? {
+        columns: [],
+        rows: [],
+        graph: { nodes: [], relationships: [] },
+        summary: { records: 0 },
+      }
+    )
+  }
+
+  if (!secondary?.graph.nodes.length) {
+    return primary
+  }
+
+  const nodeIds = new Set(primary.graph.nodes.map((node) => node.id))
+  const nodes = [...primary.graph.nodes]
+
+  for (const node of secondary.graph.nodes) {
+    if (!nodeIds.has(node.id)) {
+      nodeIds.add(node.id)
+      nodes.push(node)
+    }
+
+    if (nodes.length >= limit) {
+      break
+    }
+  }
+
+  return {
+    ...primary,
+    rows: nodes.map((node) => ({ n: node })),
+    graph: {
+      nodes,
+      relationships: primary.graph.relationships,
+    },
+    summary: {
+      ...primary.summary,
+      records: nodes.length,
+    },
+  }
 }
 
 export async function suggestLocalGraph(
@@ -356,6 +456,7 @@ export async function suggestLocalGraph(
   limit = 8
 ): Promise<GraphSearchSuggestion[]> {
   const trimmedSearch = search.trim().toLowerCase()
+  const terms = getSearchTerms(trimmedSearch)
 
   if (!trimmedSearch) {
     return []
@@ -363,9 +464,17 @@ export async function suggestLocalGraph(
 
   const result = await runLocalReadQuery(
     connection,
-    `MATCH (n)
-WHERE any(label IN labels(n) WHERE toLower(label) CONTAINS $search)
-  OR any(key IN keys(n) WHERE toLower(toString(n[key])) CONTAINS $search)
+    `WITH $terms AS terms, $collapsedSearch AS collapsedSearch
+MATCH (n)
+WITH n,
+  [label IN labels(n) | toLower(label)] AS labels,
+  [key IN keys(n) | toLower(toString(n[key]))] AS values,
+  terms,
+  collapsedSearch
+WHERE any(label IN labels WHERE label CONTAINS $search)
+  OR any(label IN labels WHERE any(term IN terms WHERE label CONTAINS term))
+  OR any(value IN values WHERE value IS NOT NULL AND any(term IN terms WHERE value CONTAINS term))
+  OR any(value IN values WHERE value IS NOT NULL AND replace(value, ' ', '') CONTAINS collapsedSearch)
 WITH n, coalesce(
   toString(n.nameEn),
   toString(n.name),
@@ -381,7 +490,12 @@ RETURN elementId(n) AS id,
   [] AS matchedKeys
 ORDER BY caption
 LIMIT $limit`,
-    { search: trimmedSearch, limit: neo4j.int(limit) }
+    {
+      search: trimmedSearch,
+      terms,
+      collapsedSearch: collapseSearchValue(trimmedSearch),
+      limit: neo4j.int(limit),
+    }
   )
 
   return result.rows.map((row) => {

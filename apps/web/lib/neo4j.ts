@@ -263,6 +263,7 @@ export async function searchGraph(
   limit = 80
 ) {
   const trimmedSearch = search.trim().toLowerCase()
+  const terms = getSearchTerms(trimmedSearch)
 
   if (!trimmedSearch) {
     return runReadQuery(connection, "MATCH (n) RETURN n LIMIT $limit", {
@@ -280,15 +281,82 @@ export async function searchGraph(
     return fullTextResult
   }
 
-  return runReadQuery(
+  const propertyResult = await searchPropertyValues(
     connection,
-    `MATCH (n)
-WHERE any(label IN labels(n) WHERE toLower(label) CONTAINS $search)
-  OR any(key IN keys(n) WHERE toLower(toString(n[key])) CONTAINS $search)
-RETURN n
-LIMIT $limit`,
-    { search: trimmedSearch, limit: neo4j.int(limit) }
+    trimmedSearch,
+    terms,
+    limit
   )
+
+  return propertyResult ?? emptyQueryResult()
+}
+
+async function searchPropertyValues(
+  connection: AdminConnection,
+  search: string,
+  terms: string[],
+  limit: number
+) {
+  try {
+    return await runReadQuery(
+      connection,
+      `WITH $terms AS terms, $collapsedSearch AS collapsedSearch
+CALL {
+  WITH terms, collapsedSearch
+  MATCH (n)
+  WITH n, [label IN labels(n) | toLower(label)] AS values, terms, collapsedSearch
+  WHERE any(value IN values WHERE value CONTAINS $search)
+    OR any(value IN values WHERE all(term IN terms WHERE value CONTAINS term))
+    OR any(value IN values WHERE replace(value, ' ', '') CONTAINS collapsedSearch)
+  RETURN n, 3 AS matchRank
+  UNION
+  WITH terms, collapsedSearch
+  MATCH (n)
+  UNWIND keys(n) AS key
+  WITH n, n[key] AS value, terms, collapsedSearch
+  WHERE valueType(value) = 'STRING NOT NULL'
+  WITH n, toLower(value) AS value, terms, collapsedSearch
+  WHERE value CONTAINS $search
+    OR all(term IN terms WHERE value CONTAINS term)
+    OR replace(value, ' ', '') CONTAINS collapsedSearch
+  RETURN n,
+    CASE
+      WHEN value CONTAINS $search THEN 4
+      WHEN replace(value, ' ', '') CONTAINS collapsedSearch THEN 3
+      ELSE 2
+    END AS matchRank
+  UNION
+  WITH terms, collapsedSearch
+  MATCH (n)
+  UNWIND keys(n) AS key
+  WITH n, n[key] AS value, terms, collapsedSearch
+  WHERE valueType(value) = 'LIST<STRING NOT NULL> NOT NULL'
+  UNWIND value AS item
+  WITH n, toLower(item) AS value, terms, collapsedSearch
+  WHERE value CONTAINS $search
+    OR all(term IN terms WHERE value CONTAINS term)
+    OR replace(value, ' ', '') CONTAINS collapsedSearch
+  RETURN n,
+    CASE
+      WHEN value CONTAINS $search THEN 4
+      WHEN replace(value, ' ', '') CONTAINS collapsedSearch THEN 3
+      ELSE 2
+    END AS matchRank
+}
+WITH n, max(matchRank) AS matchRank
+RETURN n
+ORDER BY matchRank DESC
+LIMIT $limit`,
+      {
+        search,
+        terms,
+        collapsedSearch: collapseSearchValue(search),
+        limit: neo4j.int(limit),
+      }
+    )
+  } catch {
+    return null
+  }
 }
 
 async function searchFullTextNodeIndexes(
@@ -313,17 +381,29 @@ ORDER BY name`
       return null
     }
 
+    const terms = getSearchTerms(search)
+    const candidateLimit = Math.max(limit, Math.min(limit * 10, 1000))
+
     return runReadQuery(
       connection,
       `UNWIND $indexNames AS indexName
 CALL db.index.fulltext.queryNodes(indexName, $query) YIELD node, score
 WITH node, max(score) AS score
+ORDER BY score DESC
+LIMIT $candidateLimit
+WITH collect({ node: node, score: score }) AS matches, max(score) AS maxScore
+UNWIND matches AS match
+WITH match.node AS node, match.score AS score, maxScore
+WHERE NOT $useScoreCutoff OR score >= maxScore * $scoreCutoff
 RETURN node
 ORDER BY score DESC
 LIMIT $limit`,
       {
         indexNames,
         query: createFullTextSearchQuery(search),
+        candidateLimit: neo4j.int(candidateLimit),
+        scoreCutoff: 0.49,
+        useScoreCutoff: terms.length > 1,
         limit: neo4j.int(limit),
       }
     )
@@ -333,16 +413,32 @@ LIMIT $limit`,
 }
 
 function createFullTextSearchQuery(search: string) {
-  const terms = search
-    .split(/\s+/)
-    .map((term) => term.replace(/[+\-&|!(){}[\]^"~*?:\\/]/g, "\\$&"))
-    .filter(Boolean)
+  const terms = getSearchTerms(search).map((term) =>
+    term.replace(/[+\-&|!(){}[\]^"~*?:\\/]/g, "\\$&")
+  )
 
   if (terms.length === 0) {
     return search
   }
 
-  return terms.map((term) => `${term}*`).join(" AND ")
+  return terms.join(" ")
+}
+
+function getSearchTerms(search: string) {
+  return search.split(/\s+/).filter(Boolean)
+}
+
+function collapseSearchValue(search: string) {
+  return search.replace(/\s+/g, "")
+}
+
+function emptyQueryResult(): QueryResultPayload {
+  return {
+    columns: [],
+    rows: [],
+    graph: { nodes: [], relationships: [] },
+    summary: { records: 0 },
+  }
 }
 
 export async function suggestGraph(
@@ -350,53 +446,21 @@ export async function suggestGraph(
   search: string,
   limit = 8
 ): Promise<GraphSearchSuggestion[]> {
-  const trimmedSearch = search.trim().toLowerCase()
-
-  if (!trimmedSearch) {
+  if (!search.trim()) {
     return []
   }
 
-  const result = await runReadQuery(
-    connection,
-    `MATCH (n)
-WHERE any(label IN labels(n) WHERE toLower(label) CONTAINS $search)
-  OR any(key IN keys(n) WHERE toLower(toString(n[key])) CONTAINS $search)
-WITH n, coalesce(
-  toString(n.nameEn),
-  toString(n.name),
-  toString(n.title),
-  toString(n.label),
-  toString(n._aid),
-  toString(n.id),
-  elementId(n)
-) AS caption
-RETURN elementId(n) AS id,
-  labels(n) AS labels,
-  caption,
-  [] AS matchedKeys
-ORDER BY caption
-LIMIT $limit`,
-    { search: trimmedSearch, limit: neo4j.int(limit) }
-  )
+  const result = await searchGraph(connection, search, limit)
 
-  return result.rows.map((row) => {
-    const labels = Array.isArray(row.labels)
-      ? row.labels.map((label) => String(label))
-      : []
-    const matchedKeys = Array.isArray(row.matchedKeys)
-      ? row.matchedKeys.map((key) => String(key))
-      : []
-    const caption = String(row.caption ?? row.id)
+  return result.graph.nodes.map((node) => {
+    const labels = node.labels.map((label) => String(label))
 
     return {
-      id: String(row.id),
-      caption,
+      id: node.id,
+      caption: node.caption,
       labels,
-      detail:
-        matchedKeys.length > 0
-          ? `Matched ${matchedKeys.join(", ")}`
-          : labels.join(", "),
-      searchValue: caption,
+      detail: labels.join(", "),
+      searchValue: node.caption,
     }
   })
 }
