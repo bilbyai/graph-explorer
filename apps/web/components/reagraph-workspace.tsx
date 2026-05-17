@@ -57,7 +57,17 @@ export type GraphSelection =
       type: "relationship"
       id: string
     }
+  | {
+      type: "multi"
+      ids: string[]
+    }
   | null
+
+export function getGraphSelectionIds(selection: GraphSelection): string[] {
+  if (!selection) return EMPTY_SELECTIONS
+  if (selection.type === "multi") return selection.ids
+  return [selection.id]
+}
 
 export type ExpandNodeOptions = {
   relType?: string
@@ -83,6 +93,20 @@ type ReagraphWorkspaceProps = {
     nodeId: string
   ) => Promise<NodeRelationshipSummary>
   onHideId?: (id: string) => void
+  onHideIds?: (ids: string[]) => void
+}
+
+type ModifierClickEvent = {
+  shiftKey?: boolean
+  metaKey?: boolean
+  ctrlKey?: boolean
+  nativeEvent?: {
+    shiftKey?: boolean
+    metaKey?: boolean
+    ctrlKey?: boolean
+  }
+  preventDefault?: () => void
+  stopPropagation?: () => void
 }
 
 export function ReagraphWorkspace({
@@ -99,6 +123,7 @@ export function ReagraphWorkspace({
   onExpandNode,
   onFetchRelationshipSummary,
   onHideId,
+  onHideIds,
 }: ReagraphWorkspaceProps) {
   const canvasRef = React.useRef<GraphCanvasRef>(null)
   const { resolvedTheme } = useTheme()
@@ -172,9 +197,17 @@ export function ReagraphWorkspace({
       })),
     [visibleRelationships, styling]
   )
+  const visibleRelationshipIds = React.useMemo(
+    () => new Set(edges.map((edge) => edge.id)),
+    [edges]
+  )
   const selections = React.useMemo(
-    () => (selected ? [selected.id] : EMPTY_SELECTIONS),
+    () => getGraphSelectionIds(selected),
     [selected]
+  )
+  const visibleSelectionIds = React.useMemo(
+    () => [...nodes.map((node) => node.id), ...edges.map((edge) => edge.id)],
+    [nodes, edges]
   )
   const layoutOverrides = React.useMemo(
     () => ({ nodeStrength: -600, linkDistance: 140 }),
@@ -188,6 +221,27 @@ export function ReagraphWorkspace({
   const hoveredNodeRef = React.useRef<GraphNodeRecord | null>(null)
   const [hoveredNode, setHoveredNode] = React.useState<GraphNodeRecord | null>(
     null
+  )
+
+  const getSelectionFromVisibleIds = React.useCallback(
+    (ids: string[]): GraphSelection => {
+      if (ids.length === 0) return null
+      if (ids.length > 1) return { type: "multi", ids }
+
+      const id = ids[0]
+      if (!id) return null
+
+      if (visibleNodeIds.has(id)) {
+        return { type: "node", id }
+      }
+
+      if (visibleRelationshipIds.has(id)) {
+        return { type: "relationship", id }
+      }
+
+      return null
+    },
+    [visibleNodeIds, visibleRelationshipIds]
   )
 
   React.useEffect(() => {
@@ -245,40 +299,87 @@ export function ReagraphWorkspace({
   }, [mode])
 
   React.useEffect(() => {
-    if (!selected || !onHideId) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() !== "h") return
+      const key = event.key.toLowerCase()
       if (!(event.metaKey || event.ctrlKey)) return
-      const target = event.target as HTMLElement | null
-      if (
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable)
-      ) {
+      if (key !== "a" && key !== "h") return
+      if (isEditableKeyboardTarget(event.target)) return
+
+      if (key === "a") {
+        if (visibleSelectionIds.length === 0) return
+        event.preventDefault()
+        onSelect(getSelectionFromVisibleIds(visibleSelectionIds))
+        setHoveredNode(null)
         return
       }
+
+      const selectedIds = getGraphSelectionIds(selected)
+      if (selectedIds.length === 0) return
+      if (!onHideIds && !onHideId) return
       event.preventDefault()
-      onHideId(selected.id)
+      if (onHideIds) {
+        onHideIds(selectedIds)
+        return
+      }
+      for (const id of selectedIds) {
+        onHideId?.(id)
+      }
     }
     document.addEventListener("keydown", onKeyDown)
     return () => document.removeEventListener("keydown", onKeyDown)
-  }, [selected, onHideId])
+  }, [
+    getSelectionFromVisibleIds,
+    onHideId,
+    onHideIds,
+    onSelect,
+    selected,
+    visibleSelectionIds,
+  ])
 
   const handleCanvasClick = React.useCallback(() => {
     onSelect(null)
     setHoveredNode(null)
   }, [onSelect])
 
+  const toggleSelectionId = React.useCallback(
+    (id: string) => {
+      const selectedIds = getGraphSelectionIds(selected)
+      const nextIds = selectedIds.includes(id)
+        ? selectedIds.filter((selectedId) => selectedId !== id)
+        : [...selectedIds, id]
+
+      onSelect(getSelectionFromVisibleIds(nextIds))
+      setHoveredNode(null)
+    },
+    [getSelectionFromVisibleIds, onSelect, selected]
+  )
+
   const handleNodeClick = React.useCallback(
-    (node: InternalGraphNode) => onSelect({ type: "node", id: node.id }),
-    [onSelect]
+    (node: InternalGraphNode, _props?: unknown, event?: ModifierClickEvent) => {
+      if (isModifierClick(event)) {
+        event?.preventDefault?.()
+        event?.stopPropagation?.()
+        toggleSelectionId(node.id)
+        return
+      }
+
+      onSelect({ type: "node", id: node.id })
+    },
+    [onSelect, toggleSelectionId]
   )
 
   const handleEdgeClick = React.useCallback(
-    (edge: InternalGraphEdge) =>
-      onSelect({ type: "relationship", id: edge.id }),
-    [onSelect]
+    (edge: InternalGraphEdge, event?: ModifierClickEvent) => {
+      if (isModifierClick(event)) {
+        event?.preventDefault?.()
+        event?.stopPropagation?.()
+        toggleSelectionId(edge.id)
+        return
+      }
+
+      onSelect({ type: "relationship", id: edge.id })
+    },
+    [onSelect, toggleSelectionId]
   )
 
   const handleNodePointerOver = React.useCallback((node: InternalGraphNode) => {
@@ -363,6 +464,7 @@ export function ReagraphWorkspace({
           <StaticGraphFallback
             graph={graph}
             hiddenCategories={hiddenCategories}
+            hiddenIds={hiddenIds}
             styling={styling}
             selected={selected}
             onSelect={onSelect}
@@ -580,6 +682,26 @@ function truncateForCircle(text: string, size: number): string {
   const maxChars = Math.max(6, Math.floor(size * 1.0))
   if (text.length <= maxChars) return text
   return `${text.slice(0, maxChars - 1)}…`
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false
+  return (
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.isContentEditable
+  )
+}
+
+function isModifierClick(event?: ModifierClickEvent) {
+  return Boolean(
+    event?.shiftKey ||
+      event?.metaKey ||
+      event?.ctrlKey ||
+      event?.nativeEvent?.shiftKey ||
+      event?.nativeEvent?.metaKey ||
+      event?.nativeEvent?.ctrlKey
+  )
 }
 
 function renderContextMenu(
@@ -964,12 +1086,18 @@ class GraphCanvasErrorBoundary extends React.Component<
 function StaticGraphFallback({
   graph,
   hiddenCategories,
+  hiddenIds = EMPTY_SELECTIONS,
   styling = emptyStyling,
   selected,
 }: Omit<ReagraphWorkspaceProps, "onExpandNode">) {
+  const hiddenIdSet = new Set(hiddenIds)
   const visibleNodes = graph.nodes.filter(
-    (node) => !hiddenCategories.includes(node.labels[0] ?? "Node")
+    (node) =>
+      !hiddenCategories.includes(node.labels[0] ?? "Node") &&
+      !hiddenIdSet.has(node.id)
   )
+  const visibleNodeIds = new Set(visibleNodes.map((node) => node.id))
+  const selectedIds = new Set(getGraphSelectionIds(selected))
   const styled = styleNodes(graph, styling)
   const centerX = 50
   const centerY = 50
@@ -980,6 +1108,17 @@ function StaticGraphFallback({
       <svg className="h-full w-full" role="img" viewBox="0 0 100 100">
         <title>Static graph fallback</title>
         {graph.relationships.map((relationship) => {
+          if (hiddenIdSet.has(relationship.id)) {
+            return null
+          }
+
+          if (
+            !visibleNodeIds.has(relationship.source) ||
+            !visibleNodeIds.has(relationship.target)
+          ) {
+            return null
+          }
+
           const sourceIndex = visibleNodes.findIndex(
             (node) => node.id === relationship.source
           )
@@ -1023,9 +1162,9 @@ function StaticGraphFallback({
                 cx={position.x}
                 cy={position.y}
                 fill={fill}
-                opacity={selected?.id === node.id ? "1" : "0.9"}
+                opacity={selectedIds.has(node.id) ? "1" : "0.9"}
                 r={Math.max(2.2, size / 7)}
-                stroke={selected?.id === node.id ? "#ffffff" : "transparent"}
+                stroke={selectedIds.has(node.id) ? "#ffffff" : "transparent"}
                 strokeWidth="0.5"
               />
               <text

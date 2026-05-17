@@ -68,6 +68,7 @@ import {
 } from "@/assets/icons"
 import {
   type GraphSelection,
+  getGraphSelectionIds,
   ReagraphWorkspace,
 } from "@/components/reagraph-workspace"
 import {
@@ -846,9 +847,32 @@ export function GraphExplorerApp({
     )
   }
 
+  function hideIds(ids: string[]) {
+    const idSet = new Set(ids)
+    if (idSet.size === 0) return
+
+    setHiddenIds((currentIds) => {
+      const nextIds = new Set(currentIds)
+      for (const id of idSet) {
+        nextIds.add(id)
+      }
+
+      if (nextIds.size === currentIds.length) {
+        return currentIds
+      }
+
+      return Array.from(nextIds)
+    })
+    setSelection((currentSelection) => {
+      if (!currentSelection) return currentSelection
+      return getGraphSelectionIds(currentSelection).some((id) => idSet.has(id))
+        ? null
+        : currentSelection
+    })
+  }
+
   function hideId(id: string) {
-    setHiddenIds((ids) => (ids.includes(id) ? ids : [...ids, id]))
-    if (selection?.id === id) setSelection(null)
+    hideIds([id])
   }
 
   async function deleteConnection(id: string) {
@@ -895,7 +919,7 @@ export function GraphExplorerApp({
               void loadGraph(selectedConnection, suggestion.searchValue)
             }}
             onExpand={expandSelected}
-            onHide={hideId}
+            onHideIds={hideIds}
             selection={selection}
             onReset={() => {
               setGraph(emptyGraph)
@@ -928,6 +952,7 @@ export function GraphExplorerApp({
               }
               onFetchRelationshipSummary={fetchNodeRelationshipSummary}
               onHideId={hideId}
+              onHideIds={hideIds}
             />
           </section>
           <DetailsPanel
@@ -1149,7 +1174,7 @@ function ExploreLeftPanel({
   onSearch,
   onSearchSuggestionSelect,
   onExpand,
-  onHide,
+  onHideIds,
   selection,
   onReset,
 }: {
@@ -1167,7 +1192,7 @@ function ExploreLeftPanel({
   onSearch: () => void
   onSearchSuggestionSelect: (suggestion: GraphSearchSuggestion) => void
   onExpand: () => void
-  onHide: (id: string) => void
+  onHideIds: (ids: string[]) => void
   selection: GraphSelection
   onReset: () => void
 }) {
@@ -1225,6 +1250,7 @@ function ExploreLeftPanel({
     searchResultCount === null
       ? null
       : `Found ${searchResultCount} node${searchResultCount === 1 ? "" : "s"}`
+  const selectedIds = getGraphSelectionIds(selection)
 
   React.useEffect(() => {
     const categoryNames = new Set(schema.labels.map((label) => label.name))
@@ -1383,12 +1409,14 @@ function ExploreLeftPanel({
             ) : null}
             <Button
               className="inline-flex h-8 flex-1 items-center justify-center gap-2 rounded-md border border-border text-xs hover:bg-accent"
-              onClick={() => onHide(selection.id)}
+              onClick={() => onHideIds(selectedIds)}
               type="button"
               variant="outline"
             >
               <EyeOff className="size-3.5" />
-              Hide
+              {selection.type === "multi"
+                ? `Hide ${selectedIds.length} selected`
+                : "Hide"}
             </Button>
           </div>
         ) : null}
@@ -1847,6 +1875,25 @@ function DetailsPanel({
     selected?.type === "relationship"
       ? graph.relationships.find((item) => item.id === selected.id)
       : null
+  const multiSelectionCounts = React.useMemo(() => {
+    if (selected?.type !== "multi") {
+      return null
+    }
+
+    const nodeIds = new Set(graph.nodes.map((graphNode) => graphNode.id))
+    let nodes = 0
+    let relationships = 0
+
+    for (const id of selected.ids) {
+      if (nodeIds.has(id)) {
+        nodes += 1
+      } else {
+        relationships += 1
+      }
+    }
+
+    return { nodes, relationships, total: selected.ids.length }
+  }, [graph.nodes, selected])
 
   return (
     <FadedEdgeScrollArea
@@ -1879,6 +1926,12 @@ function DetailsPanel({
             }}
             properties={relationship.properties}
           />
+        ) : multiSelectionCounts ? (
+          <dl className="grid grid-cols-2 gap-2 text-sm">
+            <Metric label="Selected" value={multiSelectionCounts.total} wide />
+            <Metric label="Nodes" value={multiSelectionCounts.nodes} />
+            <Metric label="Edges" value={multiSelectionCounts.relationships} />
+          </dl>
         ) : (
           <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
             Select a node or relationship to inspect properties and expansion
