@@ -25,6 +25,12 @@
       "skillPath": "better-auth/emailAndPassword/SKILL.md",
       "computedHash": "747d7f73bd9e2ec5317b8ef88dc70f97df716d00e3d02de4051feebaa48b062d"
     },
+    "iconmate": {
+      "source": "blankeos/iconmate",
+      "sourceType": "github",
+      "skillPath": "skills/iconmate/SKILL.md",
+      "computedHash": "f49885b20b8d3a9af6f5a23d7890289af5f608c1f0008ab5c0ad73a28d156c0c"
+    },
     "organization-best-practices": {
       "source": "better-auth/skills",
       "sourceType": "github",

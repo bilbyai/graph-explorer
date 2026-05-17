@@ -7,8 +7,9 @@ import {
 } from "@workspace/ui/components/alert"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
-import { AlertCircleIcon, GitBranch, Lock } from "lucide-react"
+import { AlertCircleIcon, Lock } from "lucide-react"
 import * as React from "react"
+import { IconGraphNetwork } from "@/assets/icons"
 import { authClient } from "@/lib/auth-client"
 
 export function SignInForm() {
@@ -54,7 +55,7 @@ export function SignInForm() {
       >
         <div className="mb-6 flex items-center gap-3">
           <div className="flex size-10 items-center justify-center rounded-md border">
-            <GitBranch className="size-5" />
+            <IconGraphNetwork className="size-5" />
           </div>
           <div>
             <h1 className="text-lg font-medium">Graph Explorer</h1>

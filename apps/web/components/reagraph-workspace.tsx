@@ -23,6 +23,7 @@ import {
 } from "reagraph"
 import { CanvasTexture, LinearFilter, type Texture } from "three"
 
+import { IconCenterBox, IconFitBox } from "@/assets/icons"
 import type {
   GraphNodeRecord,
   GraphPayload,
@@ -444,19 +445,21 @@ export function ReagraphWorkspace({
       </TooltipProvider>
       <div className="pointer-events-none absolute right-4 bottom-4 flex flex-col gap-2 rounded-md border border-border bg-muted/90 p-2 text-xs text-muted-foreground shadow-xl">
         <Button
-          className="pointer-events-auto rounded border border-border px-2 py-1 hover:bg-accent"
+          className="pointer-events-auto inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 hover:bg-accent"
           onClick={() => canvasRef.current?.fitNodesInView()}
           type="button"
           variant="outline"
         >
+          <IconFitBox className="size-3.5" />
           Fit
         </Button>
         <Button
-          className="pointer-events-auto rounded border border-border px-2 py-1 hover:bg-accent"
+          className="pointer-events-auto inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 hover:bg-accent"
           onClick={() => canvasRef.current?.centerGraph()}
           type="button"
           variant="outline"
         >
+          <IconCenterBox className="size-3.5" />
           Center
         </Button>
       </div>

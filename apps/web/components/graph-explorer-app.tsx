@@ -18,6 +18,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
+import { FadedEdgeScrollArea } from "@workspace/ui/components/faded-edge-scroll-area"
 import { Input } from "@workspace/ui/components/input"
 import {
   Popover,
@@ -39,12 +40,10 @@ import {
 import {
   BadgeInfo,
   ChevronDown,
-  CircleDot,
   Copy,
   Database,
   Eye,
   EyeOff,
-  GitBranch,
   Lock,
   LogOut,
   Maximize,
@@ -58,10 +57,15 @@ import {
   ShieldCheck,
   Sun,
   Trash2,
-  Type,
 } from "lucide-react"
 import { useTheme } from "next-themes"
 import * as React from "react"
+import {
+  IconGraphNetwork,
+  IconNodeCircle,
+  IconQuery,
+  IconRelationshipType,
+} from "@/assets/icons"
 import {
   type GraphSelection,
   ReagraphWorkspace,
@@ -1000,7 +1004,7 @@ function TopBar({
     <header className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-2 xl:flex xl:h-14 xl:justify-between xl:gap-4 xl:px-4 xl:py-0">
       <div className="flex min-w-0 items-center gap-2">
         <div className="flex size-8 items-center justify-center rounded-md border border-primary/30 bg-primary/10 text-primary">
-          <GitBranch className="size-4" />
+          <IconGraphNetwork className="size-4" />
         </div>
         <div className="min-w-0">
           <div className="truncate text-sm font-medium">Graph Explorer</div>
@@ -1067,7 +1071,7 @@ function TopBar({
       <div className="flex min-w-0 items-center justify-end gap-2">
         <div className="rounded-md border border-border bg-muted/50 p-1">
           <Button
-            className={`h-7 rounded px-3 text-sm sm:px-4 ${
+            className={`inline-flex h-7 items-center gap-1.5 rounded px-3 text-sm sm:px-4 ${
               activeTab === "explore"
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-accent"
@@ -1076,10 +1080,11 @@ function TopBar({
             type="button"
             variant="ghost"
           >
+            <IconGraphNetwork className="size-3.5" />
             Explore
           </Button>
           <Button
-            className={`h-7 rounded px-3 text-sm sm:px-4 ${
+            className={`inline-flex h-7 items-center gap-1.5 rounded px-3 text-sm sm:px-4 ${
               activeTab === "query"
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-accent"
@@ -1088,6 +1093,7 @@ function TopBar({
             type="button"
             variant="ghost"
           >
+            <IconQuery className="size-3.5" />
             Query
           </Button>
         </div>
@@ -1257,7 +1263,10 @@ function ExploreLeftPanel({
   }
 
   return (
-    <aside className="flex min-h-0 flex-col gap-4 overflow-y-auto bg-card p-4">
+    <FadedEdgeScrollArea
+      as="aside"
+      className="flex min-h-0 flex-col gap-4 bg-card p-4"
+    >
       <div className="relative">
         <label
           className="flex h-10 items-center gap-2 rounded-md border border-border bg-background px-3"
@@ -1401,10 +1410,15 @@ function ExploreLeftPanel({
           }
         >
           <TabsList className="grid h-9 w-full grid-cols-2">
-            <TabsTrigger className="text-sm" value="nodes">
+            <TabsTrigger className="inline-flex gap-1.5 text-sm" value="nodes">
+              <IconNodeCircle className="size-3.5" />
               Nodes
             </TabsTrigger>
-            <TabsTrigger className="text-sm" value="relationships">
+            <TabsTrigger
+              className="inline-flex gap-1.5 text-sm"
+              value="relationships"
+            >
+              <IconRelationshipType className="size-3.5" />
               Relationships
             </TabsTrigger>
           </TabsList>
@@ -1595,7 +1609,7 @@ function ExploreLeftPanel({
           </Button>
         )}
       </div>
-    </aside>
+    </FadedEdgeScrollArea>
   )
 }
 
@@ -1835,7 +1849,10 @@ function DetailsPanel({
       : null
 
   return (
-    <aside className="flex min-h-0 flex-col gap-4 overflow-y-auto bg-card p-4 max-xl:hidden">
+    <FadedEdgeScrollArea
+      as="aside"
+      className="flex min-h-0 flex-col gap-4 bg-card p-4 max-xl:hidden"
+    >
       <PanelSection icon={<BadgeInfo className="size-4" />} title="Selection">
         {node ? (
           <InspectorBlock
@@ -1881,14 +1898,17 @@ function DetailsPanel({
         </div>
       </PanelSection>
 
-      <PanelSection icon={<CircleDot className="size-4" />} title="Scene">
+      <PanelSection
+        icon={<IconGraphNetwork className="size-4" />}
+        title="Scene"
+      >
         <dl className="grid grid-cols-2 gap-2 text-sm">
           <Metric label="Nodes" value={graph.nodes.length} />
           <Metric label="Edges" value={graph.relationships.length} />
           <StatusMetric details={statusDetails} status={status} />
         </dl>
       </PanelSection>
-    </aside>
+    </FadedEdgeScrollArea>
   )
 }
 
@@ -2036,8 +2056,11 @@ function QueryWorkspace({
         </div>
       </div>
 
-      <aside className="min-h-0 overflow-y-auto border-l border-border bg-card p-4 max-lg:hidden">
-        <PanelSection icon={<Type className="size-4" />} title="History">
+      <FadedEdgeScrollArea
+        as="aside"
+        className="min-h-0 border-l border-border bg-card p-4 max-lg:hidden"
+      >
+        <PanelSection icon={<IconQuery className="size-4" />} title="History">
           <div className="space-y-2">
             {history.length === 0 ? (
               <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
@@ -2065,7 +2088,7 @@ function QueryWorkspace({
             )}
           </div>
         </PanelSection>
-      </aside>
+      </FadedEdgeScrollArea>
     </section>
   )
 }

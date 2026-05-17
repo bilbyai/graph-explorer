@@ -1,17 +1,17 @@
-import { Geist_Mono, IBM_Plex_Sans, Roboto } from "next/font/google"
+import { Geist, JetBrains_Mono } from "next/font/google"
 
 import "@workspace/ui/globals.css"
 import { cn } from "@workspace/ui/lib/utils"
 import { ThemeProvider } from "@/components/theme-provider"
 
-const ibmPlexSansHeading = IBM_Plex_Sans({
+const geist = Geist({
   subsets: ["latin"],
   variable: "--font-heading",
 })
 
-const roboto = Roboto({ subsets: ["latin"], variable: "--font-sans" })
+const fontSans = Geist({ subsets: ["latin"], variable: "--font-sans" })
 
-const fontMono = Geist_Mono({
+const fontMono = JetBrains_Mono({
   subsets: ["latin"],
   variable: "--font-mono",
 })
@@ -29,8 +29,8 @@ export default function RootLayout({
         "antialiased",
         fontMono.variable,
         "font-sans",
-        roboto.variable,
-        ibmPlexSansHeading.variable
+        fontSans.variable,
+        geist.variable
       )}
     >
       <body className="min-h-svh overflow-hidden">
