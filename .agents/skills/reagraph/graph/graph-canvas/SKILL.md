@@ -1,3 +1,8 @@
+---
+name: reagraph-graph-canvas
+description: Use when configuring the Reagraph GraphCanvas component, props, data, layout, theme, and event handlers.
+---
+
 # GraphCanvas
 
 Main entry point for reagraph. Wraps the Three.js canvas, scene, camera controls, and lasso selection into a single component. Pass `nodes` and `edges` data along with layout, theme, and interaction configuration.

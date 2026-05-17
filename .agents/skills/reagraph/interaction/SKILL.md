@@ -1,3 +1,8 @@
+---
+name: reagraph-interaction
+description: Use when adding Reagraph interaction behavior such as selection, camera controls, context menus, and node collapsing.
+---
+
 # Interaction
 
 User interaction modules: selection, camera controls, context menus, and node collapsing.

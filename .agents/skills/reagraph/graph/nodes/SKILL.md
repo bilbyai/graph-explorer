@@ -1,3 +1,8 @@
+---
+name: reagraph-nodes
+description: Use when rendering Reagraph nodes with built-in node components, icons, SVGs, badges, or custom node renderers.
+---
+
 # Nodes
 
 Node rendering components and custom node support. Default nodes are 3D spheres; variants add icons, SVGs, and badges. Use `renderNode` for fully custom rendering.

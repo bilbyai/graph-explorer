@@ -1,3 +1,8 @@
+---
+name: reagraph-styling
+description: Use when configuring Reagraph themes, colors, and node sizing strategies.
+---
+
 # Styling
 
 Theme configuration and node sizing strategies.

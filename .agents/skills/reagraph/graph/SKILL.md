@@ -1,3 +1,8 @@
+---
+name: reagraph-graph
+description: Use when working with Reagraph core graph rendering components including GraphCanvas, nodes, edges, labels, and clusters.
+---
+
 # Graph
 
 Core components for rendering the graph: the main canvas, node symbols, edge rendering, labels, and clusters.

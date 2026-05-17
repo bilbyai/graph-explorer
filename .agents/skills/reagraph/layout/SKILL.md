@@ -1,3 +1,8 @@
+---
+name: reagraph-layout
+description: Use when configuring Reagraph layout algorithms and node positioning for GraphCanvas visualizations.
+---
+
 # Layout
 
 Layout algorithms for positioning graph nodes.

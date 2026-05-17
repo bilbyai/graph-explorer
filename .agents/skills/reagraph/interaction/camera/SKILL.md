@@ -1,3 +1,8 @@
+---
+name: reagraph-camera
+description: Use when configuring Reagraph camera modes, camera controls, graph centering, and viewport manipulation.
+---
+
 # Camera
 
 Camera control, modes, centering, and viewport manipulation.

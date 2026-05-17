@@ -1,3 +1,8 @@
+---
+name: reagraph-context-menu
+description: Use when adding Reagraph node or edge context menus with RadialMenu or custom menu rendering.
+---
+
 # Context Menu
 
 Right-click menus for nodes and edges. Includes a built-in `RadialMenu` component with pie-slice layout, or use the `contextMenu` prop for fully custom menus.

@@ -1,3 +1,8 @@
+---
+name: reagraph-edges
+description: Use when configuring Reagraph edge rendering, arrows, dashed or curved lines, labels, self-loops, and edge aggregation.
+---
+
 # Edges
 
 Edge rendering configuration: arrows, dashed lines, curved paths, self-loops, labels, and edge aggregation.

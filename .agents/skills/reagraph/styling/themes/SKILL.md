@@ -1,3 +1,8 @@
+---
+name: reagraph-themes
+description: Use when customizing Reagraph light and dark themes for canvas, nodes, edges, arrows, clusters, labels, and lasso styling.
+---
+
 # Themes
 
 Light and dark themes with full customization of node, edge, arrow, ring, cluster, lasso, and canvas colors.

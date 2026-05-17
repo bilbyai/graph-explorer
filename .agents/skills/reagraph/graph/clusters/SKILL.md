@@ -1,3 +1,8 @@
+---
+name: reagraph-clusters
+description: Use when grouping Reagraph nodes into visual clusters and handling cluster rendering or cluster events.
+---
+
 # Clusters
 
 Group nodes into visual clusters by a shared attribute. Clusters render as rings around grouped nodes with optional labels and custom rendering.

@@ -1,3 +1,8 @@
+---
+name: reagraph-collapse
+description: Use when implementing Reagraph expand and collapse behavior for node hierarchies.
+---
+
 # Collapse
 
 Expand and collapse node hierarchies. Collapsed nodes hide their descendants while maintaining the graph structure.

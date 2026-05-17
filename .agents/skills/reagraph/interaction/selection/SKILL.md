@@ -1,3 +1,8 @@
+---
+name: reagraph-selection
+description: Use when implementing Reagraph node and edge selection, multi-selection, lasso selection, or path selection.
+---
+
 # Selection
 
 Node and edge selection with single, multi, modifier-key, lasso, and path-based modes.

@@ -1,3 +1,8 @@
+---
+name: reagraph-layouts
+description: Use when choosing or configuring Reagraph built-in layout algorithms and custom layout overrides.
+---
+
 # Layouts
 
 16 built-in layout algorithms for positioning graph nodes in 2D and 3D space. Set via the `layoutType` prop on `GraphCanvas`.

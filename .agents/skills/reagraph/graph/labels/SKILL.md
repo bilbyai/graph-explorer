@@ -1,3 +1,8 @@
+---
+name: reagraph-labels
+description: Use when configuring Reagraph node and edge labels, label visibility, positioning, fonts, and styling.
+---
+
 # Labels
 
 Label visibility, styling, and font configuration for nodes and edges. Labels auto-show/hide based on zoom level or can be forced visible.

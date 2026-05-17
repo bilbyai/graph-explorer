@@ -1,3 +1,8 @@
+---
+name: reagraph-sizing
+description: Use when configuring Reagraph node sizing strategies such as default, PageRank, centrality, or attribute-based sizing.
+---
+
 # Sizing
 
 Node sizing strategies that automatically compute node sizes based on graph metrics or custom attributes.
