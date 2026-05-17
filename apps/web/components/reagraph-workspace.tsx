@@ -102,7 +102,7 @@ type ReagraphWorkspaceProps = {
   isLoading?: boolean
   isExpanding?: boolean
   onSelect: (selection: GraphSelection) => void
-  onExpandNode: (nodeId: string, options?: ExpandNodeOptions) => void
+  onExpandNodes: (nodeIds: string[], options?: ExpandNodeOptions) => void
   onFetchRelationshipSummary?: (
     nodeId: string
   ) => Promise<NodeRelationshipSummary>
@@ -134,7 +134,7 @@ export function ReagraphWorkspace({
   isLoading = false,
   isExpanding = false,
   onSelect,
-  onExpandNode,
+  onExpandNodes,
   onFetchRelationshipSummary,
   onHideId,
   onHideIds,
@@ -445,31 +445,43 @@ export function ReagraphWorkspace({
 
   const handleNodePointerOut = React.useCallback(() => setHoveredNode(null), [])
 
-  const pendingFocusRef = React.useRef<string | null>(null)
+  const pendingFocusRef = React.useRef<string[] | null>(null)
   const prevExpandingRef = React.useRef(isExpanding)
 
-  const handleExpandNode = React.useCallback(
-    (nodeId: string, options?: ExpandNodeOptions) => {
-      pendingFocusRef.current = nodeId
-      onExpandNode(nodeId, options)
+  const handleExpandNodes = React.useCallback(
+    (nodeIds: string[], options?: ExpandNodeOptions) => {
+      pendingFocusRef.current = nodeIds
+      onExpandNodes(nodeIds, options)
     },
-    [onExpandNode]
+    [onExpandNodes]
   )
 
   const handleContextMenu = React.useCallback(
-    (event: ContextMenuEvent) =>
-      renderContextMenu(
+    (event: ContextMenuEvent) => {
+      const targetNodeIds = getContextMenuTargetNodeIds(
         event,
-        handleExpandNode,
+        selected,
+        visibleNodeIds
+      )
+
+      return renderContextMenu(
+        event,
+        targetNodeIds,
+        handleExpandNodes,
         onFetchRelationshipSummary,
         onHideId,
+        onHideIds,
         handleInspectRelationship
-      ),
+      )
+    },
     [
-      handleExpandNode,
+      handleExpandNodes,
       handleInspectRelationship,
       onFetchRelationshipSummary,
       onHideId,
+      onHideIds,
+      selected,
+      visibleNodeIds,
     ]
   )
 
@@ -477,16 +489,16 @@ export function ReagraphWorkspace({
     const wasExpanding = prevExpandingRef.current
     prevExpandingRef.current = isExpanding
     if (!wasExpanding || isExpanding) return
-    const nodeId = pendingFocusRef.current
+    const nodeIds = pendingFocusRef.current
     pendingFocusRef.current = null
-    if (!nodeId) return
+    if (!nodeIds || nodeIds.length === 0) return
     // Force-directed layout keeps shifting the new node for a moment; pan
     // once positions have settled, then again to catch any residual drift.
     const firstTimer = window.setTimeout(() => {
-      canvasRef.current?.centerGraph?.([nodeId], { animated: true })
+      canvasRef.current?.centerGraph?.(nodeIds, { animated: true })
     }, 500)
     const secondTimer = window.setTimeout(() => {
-      canvasRef.current?.centerGraph?.([nodeId], { animated: true })
+      canvasRef.current?.centerGraph?.(nodeIds, { animated: true })
     }, 1400)
     return () => {
       window.clearTimeout(firstTimer)
@@ -783,13 +795,30 @@ function isModifierClick(event?: ModifierClickEvent) {
   )
 }
 
+function getContextMenuTargetNodeIds(
+  event: ContextMenuEvent,
+  selected: GraphSelection,
+  visibleNodeIds: Set<string>
+) {
+  if ("source" in event.data) return EMPTY_SELECTIONS
+
+  const nodeId = event.data.id
+  const selectedNodeIds = getGraphSelectionIds(selected).filter((id) =>
+    visibleNodeIds.has(id)
+  )
+
+  return selectedNodeIds.includes(nodeId) ? selectedNodeIds : [nodeId]
+}
+
 function renderContextMenu(
   event: ContextMenuEvent,
-  onExpandNode: (nodeId: string, options?: ExpandNodeOptions) => void,
+  targetNodeIds: string[],
+  onExpandNodes: (nodeIds: string[], options?: ExpandNodeOptions) => void,
   onFetchRelationshipSummary?: (
     nodeId: string
   ) => Promise<NodeRelationshipSummary>,
   onHideId?: (id: string) => void,
+  onHideIds?: (ids: string[]) => void,
   onInspectRelationship?: (relationshipId: string) => void
 ) {
   const isEdge = "source" in event.data
@@ -814,30 +843,38 @@ function renderContextMenu(
   }
 
   const nodeId = event.data.id
+  const nodeIds = targetNodeIds.length > 0 ? targetNodeIds : [nodeId]
+  const isMultiNodeTarget = nodeIds.length > 1
 
   return (
     <GraphContextMenu onClose={event.onClose}>
       <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
-        Node actions
+        {isMultiNodeTarget ? "Selected node actions" : "Node actions"}
       </div>
       <ExpandMenuItem
-        nodeId={nodeId}
-        onExpandNode={onExpandNode}
+        nodeIds={nodeIds}
+        onExpandNodes={onExpandNodes}
         onFetchRelationshipSummary={onFetchRelationshipSummary}
         onCloseMenu={event.onClose}
       />
-      {onHideId && (
+      {(onHideId || onHideIds) && (
         <button
           className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground"
           type="button"
           onClick={() => {
-            onHideId(nodeId)
+            if (isMultiNodeTarget && onHideIds) {
+              onHideIds(nodeIds)
+            } else {
+              for (const id of nodeIds) {
+                onHideId?.(id)
+              }
+            }
             event.onClose()
           }}
         >
           <span className="flex items-center gap-2">
             <EyeOff className="size-3.5 shrink-0" />
-            Hide
+            {isMultiNodeTarget ? `Hide ${nodeIds.length} selected` : "Hide"}
           </span>
           <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
             ⌘ H
@@ -996,14 +1033,62 @@ function formatPropertyValue(value: unknown): string {
   }
 }
 
+async function fetchRelationshipSummaries(
+  nodeIds: string[],
+  fetchSummary: (nodeId: string) => Promise<NodeRelationshipSummary>
+): Promise<NodeRelationshipSummary> {
+  const results = await Promise.allSettled(
+    nodeIds.map((nodeId) => fetchSummary(nodeId))
+  )
+  const summaries = results.flatMap((result) =>
+    result.status === "fulfilled" ? [result.value] : []
+  )
+
+  if (summaries.length === 0 && results.length > 0) {
+    throw new Error("Relationship summaries failed")
+  }
+
+  const entries = new Map<
+    string,
+    {
+      type: string
+      direction: NodeRelationshipSummary["entries"][number]["direction"]
+      nodeCount: number
+    }
+  >()
+
+  for (const summary of summaries) {
+    for (const entry of summary.entries) {
+      const key = `${entry.direction}:${entry.type}`
+      const existing = entries.get(key)
+      if (existing) {
+        existing.nodeCount += entry.nodeCount
+      } else {
+        entries.set(key, { ...entry })
+      }
+    }
+  }
+
+  const mergedEntries = Array.from(entries.values()).sort((a, b) =>
+    a.type === b.type
+      ? a.direction.localeCompare(b.direction)
+      : a.type.localeCompare(b.type)
+  )
+
+  return {
+    total: mergedEntries.reduce((sum, entry) => sum + entry.nodeCount, 0),
+    entries: mergedEntries,
+  }
+}
+
 function ExpandMenuItem({
-  nodeId,
-  onExpandNode,
+  nodeIds,
+  onExpandNodes,
   onFetchRelationshipSummary,
   onCloseMenu,
 }: {
-  nodeId: string
-  onExpandNode: (nodeId: string, options?: ExpandNodeOptions) => void
+  nodeIds: string[]
+  onExpandNodes: (nodeIds: string[], options?: ExpandNodeOptions) => void
   onFetchRelationshipSummary?: (
     nodeId: string
   ) => Promise<NodeRelationshipSummary>
@@ -1044,7 +1129,7 @@ function ExpandMenuItem({
     setIsLoading(true)
     setHasError(false)
 
-    onFetchRelationshipSummary(nodeId)
+    fetchRelationshipSummaries(nodeIds, onFetchRelationshipSummary)
       .then((result) => {
         setSummary(result)
       })
@@ -1054,7 +1139,7 @@ function ExpandMenuItem({
       .finally(() => {
         setIsLoading(false)
       })
-  }, [cancelClose, isLoading, nodeId, onFetchRelationshipSummary])
+  }, [cancelClose, isLoading, nodeIds, onFetchRelationshipSummary])
 
   React.useEffect(() => () => cancelClose(), [cancelClose])
 
@@ -1072,7 +1157,7 @@ function ExpandMenuItem({
         type="button"
         onClick={() => {
           if (!supportsSubmenu) {
-            onExpandNode(nodeId)
+            onExpandNodes(nodeIds)
             onCloseMenu()
           }
         }}
@@ -1087,11 +1172,11 @@ function ExpandMenuItem({
       </button>
       {supportsSubmenu && isSubmenuOpen && (
         <ExpandSubmenu
-          nodeId={nodeId}
+          nodeIds={nodeIds}
           summary={summary}
           isLoading={isLoading}
           hasError={hasError}
-          onExpandNode={onExpandNode}
+          onExpandNodes={onExpandNodes}
           onCloseMenu={onCloseMenu}
           onPointerEnter={cancelClose}
           onPointerLeave={scheduleClose}
@@ -1102,20 +1187,20 @@ function ExpandMenuItem({
 }
 
 function ExpandSubmenu({
-  nodeId,
+  nodeIds,
   summary,
   isLoading,
   hasError,
-  onExpandNode,
+  onExpandNodes,
   onCloseMenu,
   onPointerEnter,
   onPointerLeave,
 }: {
-  nodeId: string
+  nodeIds: string[]
   summary: NodeRelationshipSummary | null
   isLoading: boolean
   hasError: boolean
-  onExpandNode: (nodeId: string, options?: ExpandNodeOptions) => void
+  onExpandNodes: (nodeIds: string[], options?: ExpandNodeOptions) => void
   onCloseMenu: () => void
   onPointerEnter: () => void
   onPointerLeave: () => void
@@ -1135,7 +1220,7 @@ function ExpandSubmenu({
         type="button"
         disabled={isLoading && total === 0}
         onClick={() => {
-          onExpandNode(nodeId)
+          onExpandNodes(nodeIds)
           onCloseMenu()
         }}
       >
@@ -1173,7 +1258,7 @@ function ExpandSubmenu({
             className="flex w-full cursor-pointer items-center justify-between gap-4 rounded-sm px-2 py-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground"
             type="button"
             onClick={() => {
-              onExpandNode(nodeId, {
+              onExpandNodes(nodeIds, {
                 relType: entry.type,
                 direction: entry.direction,
               })
@@ -1335,7 +1420,7 @@ function StaticGraphFallback({
   hiddenIds = EMPTY_SELECTIONS,
   styling = emptyStyling,
   selected,
-}: Omit<ReagraphWorkspaceProps, "onExpandNode">) {
+}: Omit<ReagraphWorkspaceProps, "onExpandNodes">) {
   const hiddenIdSet = new Set(hiddenIds)
   const visibleNodes = graph.nodes.filter(
     (node) =>

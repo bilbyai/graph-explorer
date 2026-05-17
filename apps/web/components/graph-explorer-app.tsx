@@ -67,6 +67,7 @@ import {
   IconRelationshipType,
 } from "@/assets/icons"
 import {
+  type ExpandNodeOptions,
   type GraphSelection,
   getGraphSelectionIds,
   ReagraphWorkspace,
@@ -590,13 +591,17 @@ export function GraphExplorerApp({
     void loadGraph(selectedConnection, "")
   }, [loadGraph, loadSchema, selectedConnection])
 
-  async function expandNode(
-    nodeId: string,
-    options: {
-      relType?: string
-      direction?: "incoming" | "outgoing" | "both"
-    } = {}
+  async function expandNodes(
+    nodeIds: string[],
+    options: ExpandNodeOptions = {}
   ) {
+    const targetNodeIds = getNodeIdsFromIds(nodeIds, graph)
+
+    if (targetNodeIds.length === 0) {
+      setStatus("Select a node to expand")
+      return
+    }
+
     if (selectedConnection.source === "sample") {
       setStatus("Sample graph expansion is already loaded")
       return
@@ -605,53 +610,70 @@ export function GraphExplorerApp({
     const direction = options.direction ?? "both"
     const relType = options.relType
     const expansionLabel = relType ? `${relType} neighborhood` : "neighborhood"
+    const targetLabel =
+      targetNodeIds.length === 1 ? "this node" : `${targetNodeIds.length} nodes`
 
     setIsGraphExpanding(true)
     try {
       if (selectedConnection.source === "local") {
-        setStatus(`Expanding local ${expansionLabel} from this browser`)
+        setStatus(
+          `Expanding local ${expansionLabel} from ${targetLabel} in this browser`
+        )
 
         try {
-          const expandedGraph = await expandLocalGraph(
-            selectedConnection,
-            nodeId,
-            direction,
-            120,
-            relType
-          )
+          let expandedGraph: GraphPayload = emptyGraph
 
-          setGraph((currentGraph) =>
-            mergeGraphs(currentGraph, expandedGraph.graph)
-          )
-          setStatus(`Local ${expansionLabel} expanded`)
+          for (const nodeId of targetNodeIds) {
+            const result = await expandLocalGraph(
+              selectedConnection,
+              nodeId,
+              direction,
+              120,
+              relType
+            )
+            expandedGraph = mergeGraphs(expandedGraph, result.graph)
+          }
+
+          setGraph((currentGraph) => mergeGraphs(currentGraph, expandedGraph))
+          setStatus(`Local ${expansionLabel} expanded from ${targetLabel}`)
         } catch {
           setStatus("Local graph expansion failed")
         }
         return
       }
 
-      setStatus(`Expanding ${expansionLabel}`)
+      setStatus(`Expanding ${expansionLabel} from ${targetLabel}`)
 
       try {
-        const response = await fetch("/api/explore/expand", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            connectionId: selectedConnection.id,
-            nodeId,
-            direction,
-            limit: 120,
-            relType,
-          }),
-        })
-        const expandedGraph = (await response.json()) as GraphPayload
+        let expandedGraph: GraphPayload = emptyGraph
+
+        for (const nodeId of targetNodeIds) {
+          const response = await fetch("/api/explore/expand", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              connectionId: selectedConnection.id,
+              nodeId,
+              direction,
+              limit: 120,
+              relType,
+            }),
+          })
+
+          if (!response.ok) {
+            throw new Error("Expansion request failed")
+          }
+
+          const result = (await response.json()) as GraphPayload
+          expandedGraph = mergeGraphs(expandedGraph, result)
+        }
 
         setGraph((currentGraph) => mergeGraphs(currentGraph, expandedGraph))
         const capitalLabel =
           expansionLabel.charAt(0).toUpperCase() + expansionLabel.slice(1)
-        setStatus(`${capitalLabel} expanded`)
+        setStatus(`${capitalLabel} expanded from ${targetLabel}`)
       } catch {
         setStatus("Expansion failed")
       }
@@ -734,11 +756,14 @@ export function GraphExplorerApp({
   }
 
   function expandSelected() {
-    if (!selection || selection.type !== "node") {
+    const selectedNodeIds = getSelectionNodeIds(selection, graph)
+
+    if (selectedNodeIds.length === 0) {
       setStatus("Select a node to expand")
       return
     }
-    void expandNode(selection.id)
+
+    void expandNodes(selectedNodeIds)
   }
 
   async function runQuery() {
@@ -947,8 +972,8 @@ export function GraphExplorerApp({
               isLoading={isGraphLoading}
               isExpanding={isGraphExpanding}
               onSelect={setSelection}
-              onExpandNode={(nodeId, options) =>
-                void expandNode(nodeId, options)
+              onExpandNodes={(nodeIds, options) =>
+                void expandNodes(nodeIds, options)
               }
               onFetchRelationshipSummary={fetchNodeRelationshipSummary}
               onHideId={hideId}
@@ -1251,6 +1276,7 @@ function ExploreLeftPanel({
       ? null
       : `Found ${searchResultCount} node${searchResultCount === 1 ? "" : "s"}`
   const selectedIds = getGraphSelectionIds(selection)
+  const selectedNodeIds = getSelectionNodeIds(selection, graph)
 
   React.useEffect(() => {
     const categoryNames = new Set(schema.labels.map((label) => label.name))
@@ -1396,7 +1422,7 @@ function ExploreLeftPanel({
       <PanelSection icon={<Settings2 className="size-4" />} title="Graph">
         {selection ? (
           <div className="flex gap-2">
-            {selection.type === "node" ? (
+            {selectedNodeIds.length > 0 ? (
               <Button
                 className="inline-flex h-8 flex-1 items-center justify-center gap-2 rounded-md border border-border text-xs hover:bg-accent"
                 onClick={onExpand}
@@ -1404,7 +1430,9 @@ function ExploreLeftPanel({
                 variant="outline"
               >
                 <Maximize className="size-3.5" />
-                Expand node
+                {selectedNodeIds.length === 1
+                  ? "Expand node"
+                  : `Expand ${selectedNodeIds.length} nodes`}
               </Button>
             ) : null}
             <Button
@@ -2485,6 +2513,24 @@ function mergeGraphs(currentGraph: GraphPayload, nextGraph: GraphPayload) {
       ),
     ],
   }
+}
+
+function getNodeIdsFromIds(ids: string[], graph: GraphPayload) {
+  const graphNodeIds = new Set(graph.nodes.map((node) => node.id))
+  const seen = new Set<string>()
+
+  return ids.filter((id) => {
+    if (seen.has(id) || !graphNodeIds.has(id)) {
+      return false
+    }
+
+    seen.add(id)
+    return true
+  })
+}
+
+function getSelectionNodeIds(selection: GraphSelection, graph: GraphPayload) {
+  return getNodeIdsFromIds(getGraphSelectionIds(selection), graph)
 }
 
 function sampleQueryResult(): QueryResultPayload {
