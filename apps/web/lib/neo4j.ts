@@ -270,6 +270,16 @@ export async function searchGraph(
     })
   }
 
+  const fullTextResult = await searchFullTextNodeIndexes(
+    connection,
+    trimmedSearch,
+    limit
+  )
+
+  if (fullTextResult?.graph.nodes.length) {
+    return fullTextResult
+  }
+
   return runReadQuery(
     connection,
     `MATCH (n)
@@ -279,6 +289,60 @@ RETURN n
 LIMIT $limit`,
     { search: trimmedSearch, limit: neo4j.int(limit) }
   )
+}
+
+async function searchFullTextNodeIndexes(
+  connection: AdminConnection,
+  search: string,
+  limit: number
+) {
+  try {
+    const indexes = await runReadQuery(
+      connection,
+      `SHOW FULLTEXT INDEXES
+YIELD name, type, entityType, state
+WHERE type = 'FULLTEXT' AND entityType = 'NODE' AND state = 'ONLINE'
+RETURN name
+ORDER BY name`
+    )
+    const indexNames = indexes.rows
+      .map((row) => row.name)
+      .filter((name): name is string => typeof name === "string")
+
+    if (indexNames.length === 0) {
+      return null
+    }
+
+    return runReadQuery(
+      connection,
+      `UNWIND $indexNames AS indexName
+CALL db.index.fulltext.queryNodes(indexName, $query) YIELD node, score
+WITH node, max(score) AS score
+RETURN node
+ORDER BY score DESC
+LIMIT $limit`,
+      {
+        indexNames,
+        query: createFullTextSearchQuery(search),
+        limit: neo4j.int(limit),
+      }
+    )
+  } catch {
+    return null
+  }
+}
+
+function createFullTextSearchQuery(search: string) {
+  const terms = search
+    .split(/\s+/)
+    .map((term) => term.replace(/[+\-&|!(){}[\]^"~*?:\\/]/g, "\\$&"))
+    .filter(Boolean)
+
+  if (terms.length === 0) {
+    return search
+  }
+
+  return terms.map((term) => `${term}*`).join(" AND ")
 }
 
 export async function suggestGraph(

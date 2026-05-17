@@ -228,6 +228,13 @@ export function GraphExplorerApp({
     GraphSearchSuggestion[]
   >([])
   const [isSearchSuggesting, setIsSearchSuggesting] = React.useState(false)
+  const [searchResultCount, setSearchResultCount] = React.useState<
+    number | null
+  >(null)
+  const [focusRequest, setFocusRequest] = React.useState<{
+    nodeId: string
+    version: number
+  } | null>(null)
   const [canvasVersion, setCanvasVersion] = React.useState(0)
   const [hiddenCategories, setHiddenCategories] = React.useState<string[]>([])
   const [hiddenIds, setHiddenIds] = React.useState<string[]>([])
@@ -288,17 +295,55 @@ export function GraphExplorerApp({
     }
   }, [])
 
+  const applyGraphSearchResult = React.useCallback(
+    (result: GraphPayload, search: string, loadedStatus: string) => {
+      const trimmedSearch = search.trim()
+
+      setGraph(result)
+
+      if (trimmedSearch) {
+        const nodeCount = result.nodes.length
+        setSearchResultCount(nodeCount)
+        setStatus(`${nodeCount} ${nodeCount === 1 ? "node" : "nodes"} found`)
+
+        if (nodeCount === 1) {
+          const nodeId = result.nodes[0]?.id
+          if (nodeId) {
+            setSelection({ type: "node", id: nodeId })
+            setFocusRequest((currentRequest) => ({
+              nodeId,
+              version: (currentRequest?.version ?? 0) + 1,
+            }))
+          }
+        } else {
+          setSelection(null)
+        }
+
+        return
+      }
+
+      setSelection(null)
+      setSearchResultCount(null)
+      setStatus(loadedStatus)
+    },
+    []
+  )
+
   const loadGraph = React.useCallback(
     async (connection: ConnectionOption, search: string) => {
       setStatusDetails(null)
       setGraph(emptyGraph)
+      setSearchResultCount(null)
       setHiddenIds([])
       setIsGraphLoading(true)
 
       try {
         if (connection.source === "sample") {
-          setGraph(searchSampleGraph(search))
-          setStatus("Loaded sample graph")
+          applyGraphSearchResult(
+            searchSampleGraph(search),
+            search,
+            "Loaded sample graph"
+          )
           return
         }
 
@@ -307,8 +352,7 @@ export function GraphExplorerApp({
 
           try {
             const result = await searchLocalGraph(connection, search, 120)
-            setGraph(result.graph)
-            setStatus("Local graph loaded")
+            applyGraphSearchResult(result.graph, search, "Local graph loaded")
           } catch (error) {
             setGraph(emptyGraph)
             setStatus("Local browser connection failed")
@@ -383,8 +427,11 @@ export function GraphExplorerApp({
             return
           }
 
-          setGraph(await response.json())
-          setStatus("Graph loaded")
+          applyGraphSearchResult(
+            (await response.json()) as GraphPayload,
+            search,
+            "Graph loaded"
+          )
           setStatusDetails(null)
         } catch (error) {
           setGraph(emptyGraph)
@@ -412,7 +459,7 @@ export function GraphExplorerApp({
         setIsGraphLoading(false)
       }
     },
-    []
+    [applyGraphSearchResult]
   )
 
   React.useEffect(() => {
@@ -828,6 +875,7 @@ export function GraphExplorerApp({
         <section className="grid min-h-0 flex-1 grid-cols-[310px_minmax(0,1fr)_330px] border-t border-border max-xl:grid-cols-[280px_minmax(0,1fr)] max-lg:grid-cols-1">
           <ExploreLeftPanel
             searchTerm={searchTerm}
+            searchResultCount={searchResultCount}
             onSearchTermChange={setSearchTerm}
             schema={schema}
             graph={graph}
@@ -850,8 +898,10 @@ export function GraphExplorerApp({
               setSelection(null)
               setSearchTerm("")
               setSearchSuggestions([])
+              setSearchResultCount(null)
               setHiddenCategories([])
               setHiddenIds([])
+              setFocusRequest(null)
               setStatusDetails(null)
               setCanvasVersion((version) => version + 1)
               setStatus("Canvas cleared")
@@ -861,6 +911,7 @@ export function GraphExplorerApp({
             <ReagraphWorkspace
               graph={graph}
               canvasKey={canvasVersion}
+              focusRequest={focusRequest}
               hiddenCategories={hiddenCategories}
               hiddenIds={hiddenIds}
               styling={styling}
@@ -946,24 +997,24 @@ function TopBar({
   React.useEffect(() => setMounted(true), [])
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-4 px-4">
+    <header className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-2 xl:flex xl:h-14 xl:justify-between xl:gap-4 xl:px-4 xl:py-0">
       <div className="flex min-w-0 items-center gap-2">
         <div className="flex size-8 items-center justify-center rounded-md border border-primary/30 bg-primary/10 text-primary">
           <GitBranch className="size-4" />
         </div>
         <div className="min-w-0">
-          <div className="text-sm font-medium">Graph Explorer</div>
-          <div className="truncate text-xs text-muted-foreground">
+          <div className="truncate text-sm font-medium">Graph Explorer</div>
+          <div className="hidden truncate text-xs text-muted-foreground sm:block">
             Read-only Neo4j workspace
           </div>
         </div>
       </div>
 
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="order-3 col-span-2 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[minmax(12rem,1fr)_auto_auto] xl:order-none xl:col-span-1 xl:flex xl:gap-3">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
-              className="inline-flex h-8 min-w-64 items-center justify-between gap-2 rounded-md border border-border px-2 text-sm font-normal hover:bg-accent"
+              className="inline-flex h-8 min-w-0 items-center justify-between gap-2 rounded-md border border-border px-2 text-sm font-normal hover:bg-accent xl:min-w-64"
               type="button"
               variant="outline"
             >
@@ -1013,10 +1064,10 @@ function TopBar({
         </TooltipProvider>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 items-center justify-end gap-2">
         <div className="rounded-md border border-border bg-muted/50 p-1">
           <Button
-            className={`h-7 rounded px-4 text-sm ${
+            className={`h-7 rounded px-3 text-sm sm:px-4 ${
               activeTab === "explore"
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-accent"
@@ -1028,7 +1079,7 @@ function TopBar({
             Explore
           </Button>
           <Button
-            className={`h-7 rounded px-4 text-sm ${
+            className={`h-7 rounded px-3 text-sm sm:px-4 ${
               activeTab === "query"
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-accent"
@@ -1079,6 +1130,7 @@ function TopBar({
 
 function ExploreLeftPanel({
   searchTerm,
+  searchResultCount,
   schema,
   graph,
   hiddenCategories,
@@ -1096,6 +1148,7 @@ function ExploreLeftPanel({
   onReset,
 }: {
   searchTerm: string
+  searchResultCount: number | null
   schema: SchemaPayload
   graph: GraphPayload
   hiddenCategories: string[]
@@ -1162,6 +1215,10 @@ function ExploreLeftPanel({
     suggestionsOpen &&
     searchTerm.trim().length >= 2 &&
     (isSearchSuggesting || searchSuggestions.length > 0)
+  const searchResultLabel =
+    searchResultCount === null
+      ? null
+      : `Found ${searchResultCount} node${searchResultCount === 1 ? "" : "s"}`
 
   React.useEffect(() => {
     const categoryNames = new Set(schema.labels.map((label) => label.name))
@@ -1169,10 +1226,6 @@ function ExploreLeftPanel({
       setOpenCategory(null)
     }
   }, [openCategory, schema.labels])
-
-  React.useEffect(() => {
-    setActiveSuggestionIndex(searchSuggestions.length > 0 ? 0 : -1)
-  }, [searchSuggestions])
 
   const updateLabelStyle = (
     label: string,
@@ -1198,6 +1251,11 @@ function ExploreLeftPanel({
     onSearchSuggestionSelect(suggestion)
   }
 
+  const handleSearchTermChange = (value: string) => {
+    setActiveSuggestionIndex(-1)
+    onSearchTermChange(value)
+  }
+
   return (
     <aside className="flex min-h-0 flex-col gap-4 overflow-y-auto bg-card p-4">
       <div className="relative">
@@ -1211,7 +1269,7 @@ function ExploreLeftPanel({
             id="explore-search"
             placeholder="Search nodes"
             value={searchTerm}
-            onChange={(event) => onSearchTermChange(event.target.value)}
+            onChange={(event) => handleSearchTermChange(event.target.value)}
             onFocus={() => setSuggestionsOpen(true)}
             onBlur={() => {
               window.setTimeout(() => setSuggestionsOpen(false), 100)
@@ -1291,6 +1349,11 @@ function ExploreLeftPanel({
                 ))}
               </div>
             )}
+          </div>
+        ) : null}
+        {searchResultLabel ? (
+          <div className="mt-2 px-1 text-xs font-medium text-muted-foreground">
+            {searchResultLabel}
           </div>
         ) : null}
       </div>

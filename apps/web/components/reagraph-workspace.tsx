@@ -66,6 +66,10 @@ export type ExpandNodeOptions = {
 type ReagraphWorkspaceProps = {
   graph: GraphPayload
   canvasKey?: string | number
+  focusRequest?: {
+    nodeId: string
+    version: number
+  } | null
   hiddenCategories: string[]
   hiddenIds?: string[]
   styling?: StylingState
@@ -83,6 +87,7 @@ type ReagraphWorkspaceProps = {
 export function ReagraphWorkspace({
   graph,
   canvasKey,
+  focusRequest,
   hiddenCategories,
   hiddenIds,
   styling = emptyStyling,
@@ -324,6 +329,27 @@ export function ReagraphWorkspace({
       window.clearTimeout(secondTimer)
     }
   }, [isExpanding])
+
+  React.useEffect(() => {
+    if (!focusRequest) return
+    if (!visibleNodeIds.has(focusRequest.nodeId)) return
+
+    const firstTimer = window.setTimeout(() => {
+      canvasRef.current?.centerGraph?.([focusRequest.nodeId], {
+        animated: true,
+      })
+    }, 300)
+    const secondTimer = window.setTimeout(() => {
+      canvasRef.current?.centerGraph?.([focusRequest.nodeId], {
+        animated: true,
+      })
+    }, 1000)
+
+    return () => {
+      window.clearTimeout(firstTimer)
+      window.clearTimeout(secondTimer)
+    }
+  }, [focusRequest, visibleNodeIds])
 
   return (
     <div
