@@ -20,6 +20,7 @@ import {
   decryptLocalPassword,
   type LocalConnection,
 } from "@/lib/local-connections"
+import { NODE_CAPTION_KEYS, resolveNodeCaption } from "@/lib/node-captions"
 import { getDefaultLabelColor as getCategoryColor } from "@/lib/node-styling"
 
 type QueryParams = Record<string, unknown>
@@ -113,18 +114,6 @@ function serializeProperties(properties: Record<string, unknown>) {
   )
 }
 
-function getCaption(properties: Record<string, unknown>, fallback: string) {
-  for (const field of ["nameEn", "name", "title", "label", "_aid", "id"]) {
-    const value = properties[field]
-
-    if (typeof value === "string" && value.trim()) {
-      return value
-    }
-  }
-
-  return fallback
-}
-
 function serializeNode(node: Neo4jNode): GraphNodeRecord {
   const labels = [...node.labels]
   const properties = serializeProperties(node.properties)
@@ -133,7 +122,7 @@ function serializeNode(node: Neo4jNode): GraphNodeRecord {
   return {
     id: node.elementId,
     labels,
-    caption: getCaption(properties, node.elementId),
+    caption: resolveNodeCaption(properties, node.elementId),
     properties,
     size: Math.max(8, Math.min(30, labels.length * 4 + 12)),
     color: getCategoryColor(primaryLabel),
@@ -591,12 +580,11 @@ WHERE any(label IN labels WHERE label CONTAINS $search)
   OR any(value IN values WHERE value IS NOT NULL AND any(term IN terms WHERE value CONTAINS term))
   OR any(value IN values WHERE value IS NOT NULL AND replace(value, ' ', '') CONTAINS collapsedSearch)
 WITH n, coalesce(
-  toString(n.nameEn),
-  toString(n.name),
-  toString(n.title),
-  toString(n.label),
-  toString(n._aid),
-  toString(n.id),
+  head([
+    key IN $captionKeys
+    WHERE n[key] IS NOT NULL AND trim(toString(n[key])) <> ''
+    | toString(n[key])
+  ]),
   elementId(n)
 ) AS caption
 RETURN elementId(n) AS id,
@@ -609,6 +597,7 @@ LIMIT $limit`,
       search: trimmedSearch,
       terms,
       collapsedSearch: collapseSearchValue(trimmedSearch),
+      captionKeys: [...NODE_CAPTION_KEYS],
       limit: neo4j.int(limit),
     }
   )

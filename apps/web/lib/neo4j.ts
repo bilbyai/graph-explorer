@@ -16,6 +16,7 @@ import type {
   QueryResultPayload,
   SchemaPayload,
 } from "@/lib/graph-types"
+import { resolveNodeCaption } from "@/lib/node-captions"
 import { getDefaultLabelColor as getCategoryColor } from "@/lib/node-styling"
 
 type QueryParams = Record<string, unknown>
@@ -109,20 +110,6 @@ function serializeProperties(properties: Record<string, unknown>) {
   )
 }
 
-function getCaption(properties: Record<string, unknown>, fallback: string) {
-  const fields = ["nameEn", "name", "title", "label", "_aid", "id"]
-
-  for (const field of fields) {
-    const value = properties[field]
-
-    if (typeof value === "string" && value.trim()) {
-      return value
-    }
-  }
-
-  return fallback
-}
-
 export function serializeNode(node: Neo4jNode): GraphNodeRecord {
   const labels = [...node.labels]
   const properties = serializeProperties(node.properties)
@@ -131,7 +118,7 @@ export function serializeNode(node: Neo4jNode): GraphNodeRecord {
   return {
     id: node.elementId,
     labels,
-    caption: getCaption(properties, node.elementId),
+    caption: resolveNodeCaption(properties, node.elementId),
     properties,
     size: Math.max(8, Math.min(30, labels.length * 4 + 12)),
     color: getCategoryColor(primaryLabel),

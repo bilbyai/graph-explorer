@@ -1,4 +1,5 @@
 import type { GraphNodeRecord, GraphPayload } from "@/lib/graph-types"
+import { resolveNodeCaption } from "@/lib/node-captions"
 
 export type NodeTextRow = {
   key: string
@@ -92,16 +93,8 @@ export function getDefaultLabelColor(label: string): string {
   return DEFAULT_LABEL_COLORS[index] ?? DEFAULT_LABEL_COLORS[0]
 }
 
-const CAPTION_NAME_KEYS = ["name", "title", "label"] as const
-
 function fallbackCaption(node: GraphNodeRecord): string {
-  for (const key of CAPTION_NAME_KEYS) {
-    const value = node.properties[key]
-    if (typeof value === "string" && value.trim() !== "") return value
-    if (typeof value === "number" || typeof value === "bigint")
-      return String(value)
-  }
-  return node.labels[0] ?? node.id
+  return resolveNodeCaption(node.properties, node.labels[0] ?? node.id)
 }
 
 export type StylingState = {
