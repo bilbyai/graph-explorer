@@ -21,6 +21,7 @@ import {
   Loader2,
   Maximize,
   Minus,
+  Orbit,
   Plus,
 } from "lucide-react"
 import dynamic from "next/dynamic"
@@ -282,6 +283,11 @@ export function ReagraphWorkspace({
     () => ({ nodeStrength: -600, linkDistance: 140 }),
     []
   )
+  const [spinEnabled, setSpinEnabled] = React.useState(false)
+  const cameraMode = React.useMemo(
+    () => (mode === "3d" ? (spinEnabled ? "orbit" : "rotate") : "orthographic"),
+    [mode, spinEnabled]
+  )
   const [inspectedRelationshipId, setInspectedRelationshipId] = React.useState<
     string | null
   >(null)
@@ -416,7 +422,7 @@ export function ReagraphWorkspace({
   )
 
   React.useEffect(() => {
-    if (mode !== "3d") return
+    if (cameraMode === "orthographic") return
 
     let cancelled = false
     let attempts = 0
@@ -461,7 +467,12 @@ export function ReagraphWorkspace({
       document.removeEventListener("keyup", onKeyUp)
       window.removeEventListener("blur", onBlur)
     }
-  }, [mode])
+  }, [cameraMode])
+
+  React.useEffect(() => {
+    if (mode === "3d" || !spinEnabled) return
+    setSpinEnabled(false)
+  }, [mode, spinEnabled])
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -752,7 +763,7 @@ export function ReagraphWorkspace({
           theme={graphTheme}
           layoutType={mode === "3d" ? "forceDirected3d" : "forceDirected2d"}
           layoutOverrides={layoutOverrides}
-          cameraMode={mode === "3d" ? "rotate" : "orthographic"}
+          cameraMode={cameraMode}
           selections={selections}
           draggable={adaptiveRendering.draggable}
           animated={adaptiveRendering.animated}
@@ -887,6 +898,18 @@ export function ReagraphWorkspace({
           <IconCenterBox className="size-3.5" />
           Center
         </Button>
+        {mode === "3d" && (
+          <Button
+            aria-pressed={spinEnabled}
+            className="pointer-events-auto inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 hover:bg-accent"
+            onClick={() => setSpinEnabled((enabled) => !enabled)}
+            type="button"
+            variant={spinEnabled ? "default" : "outline"}
+          >
+            <Orbit className="size-3.5" />
+            Spin
+          </Button>
+        )}
       </div>
     </div>
   )
