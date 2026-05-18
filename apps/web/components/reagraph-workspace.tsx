@@ -336,6 +336,54 @@ export function ReagraphWorkspace({
   }, [mode])
 
   React.useEffect(() => {
+    if (mode !== "3d") return
+
+    let cancelled = false
+    let attempts = 0
+    let shiftPressed = false
+    const apply = () => {
+      if (cancelled) return
+      const controls = canvasRef.current?.getControls() as
+        | { mouseButtons?: { left?: number } }
+        | undefined
+      if (controls?.mouseButtons) {
+        controls.mouseButtons.left = shiftPressed ? 2 : 1
+        return
+      }
+      if (attempts < 60) {
+        attempts += 1
+        window.setTimeout(apply, 50)
+      }
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Shift" || shiftPressed) return
+      shiftPressed = true
+      apply()
+    }
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key !== "Shift") return
+      shiftPressed = false
+      apply()
+    }
+    const onBlur = () => {
+      shiftPressed = false
+      apply()
+    }
+
+    apply()
+    document.addEventListener("keydown", onKeyDown)
+    document.addEventListener("keyup", onKeyUp)
+    window.addEventListener("blur", onBlur)
+
+    return () => {
+      cancelled = true
+      document.removeEventListener("keydown", onKeyDown)
+      document.removeEventListener("keyup", onKeyUp)
+      window.removeEventListener("blur", onBlur)
+    }
+  }, [mode])
+
+  React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase()
       if (!(event.metaKey || event.ctrlKey)) return
