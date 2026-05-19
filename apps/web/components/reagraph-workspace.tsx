@@ -70,6 +70,23 @@ const lightRenderNodeThreshold = 750
 const lightRenderRelationshipThreshold = 1500
 const minZoomPercent = 20
 const maxZoomPercent = 8000
+const spinRadiansPerMillisecond = 0.00015
+
+type SpinCameraControls = {
+  rotate: (
+    azimuthAngle: number,
+    polarAngle: number,
+    enableTransition?: boolean
+  ) => Promise<void>
+  addEventListener: (
+    type: "controlstart" | "controlend",
+    listener: () => void
+  ) => void
+  removeEventListener: (
+    type: "controlstart" | "controlend",
+    listener: () => void
+  ) => void
+}
 
 export type GraphSelection =
   | {
@@ -286,10 +303,7 @@ export function ReagraphWorkspace({
     []
   )
   const [spinEnabled, setSpinEnabled] = React.useState(false)
-  const cameraMode = React.useMemo(
-    () => (mode === "3d" ? (spinEnabled ? "orbit" : "rotate") : "orthographic"),
-    [mode, spinEnabled]
-  )
+  const cameraMode = mode === "3d" ? "rotate" : "orthographic"
   const [inspectedRelationshipId, setInspectedRelationshipId] = React.useState<
     string | null
   >(null)
@@ -548,6 +562,63 @@ export function ReagraphWorkspace({
   React.useEffect(() => {
     if (mode === "3d" || !spinEnabled) return
     setSpinEnabled(false)
+  }, [mode, spinEnabled])
+
+  React.useEffect(() => {
+    if (mode !== "3d" || !spinEnabled) return
+
+    let controls: SpinCameraControls | null = null
+    let frameId: number | null = null
+    let previousTime: number | null = null
+    let isControlling = false
+
+    const onControlStart = () => {
+      isControlling = true
+      previousTime = null
+    }
+    const onControlEnd = () => {
+      isControlling = false
+      previousTime = null
+    }
+    const detachControls = () => {
+      controls?.removeEventListener("controlstart", onControlStart)
+      controls?.removeEventListener("controlend", onControlEnd)
+      controls = null
+    }
+    const syncControls = () => {
+      const nextControls = canvasRef.current?.getControls?.() as
+        | SpinCameraControls
+        | null
+        | undefined
+      if (nextControls === controls) return
+
+      detachControls()
+      controls = nextControls ?? null
+      controls?.addEventListener("controlstart", onControlStart)
+      controls?.addEventListener("controlend", onControlEnd)
+    }
+    const tick = (time: number) => {
+      syncControls()
+
+      if (controls && !isControlling) {
+        if (previousTime !== null) {
+          const delta = Math.min(time - previousTime, 32)
+          void controls.rotate(delta * spinRadiansPerMillisecond, 0, false)
+        }
+        previousTime = time
+      }
+
+      frameId = window.requestAnimationFrame(tick)
+    }
+
+    frameId = window.requestAnimationFrame(tick)
+
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId)
+      }
+      detachControls()
+    }
   }, [mode, spinEnabled])
 
   React.useEffect(() => {

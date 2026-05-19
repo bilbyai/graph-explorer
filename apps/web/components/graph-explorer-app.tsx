@@ -2663,6 +2663,8 @@ function NodeInspector({
             connections={connections}
             graph={inspectedGraph}
             neighborCount={neighborCount}
+            onDismissIds={onDismissIds}
+            sceneGraph={graph}
             onReveal={onReveal}
           />
         </TabsContent>
@@ -2715,11 +2717,15 @@ function NodeNeighborsTab({
   connections,
   graph,
   neighborCount,
+  onDismissIds,
+  sceneGraph,
   onReveal,
 }: {
   connections: NodeConnection[]
   graph: GraphPayload
   neighborCount: number
+  onDismissIds: (ids: string[]) => void
+  sceneGraph: GraphPayload
   onReveal: (request: RevealRequest) => void
 }) {
   const byNode = new Map<
@@ -2759,45 +2765,53 @@ function NodeNeighborsTab({
         <DetailChip>{connections.length} relationships</DetailChip>
       </div>
       <div className="space-y-2">
-        {neighbors.map(({ node: neighbor, connections: nodeConnections }) => (
-          <RevealContextMenu
-            key={neighbor.id}
-            onReveal={() =>
-              onReveal({
-                graph,
-                selection: { type: "node", id: neighbor.id },
-                focusNodeId: neighbor.id,
-              })
-            }
-          >
-            <div className="rounded-md border border-border bg-background p-3">
-              <div className="flex min-w-0 items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium text-foreground">
-                    {neighbor.caption}
+        {neighbors.map(({ node: neighbor, connections: nodeConnections }) => {
+          const nodeInScene = sceneGraph.nodes.some(
+            (node) => node.id === neighbor.id
+          )
+
+          return (
+            <RevealContextMenu
+              key={neighbor.id}
+              label={nodeInScene ? "Jump to node" : "Reveal"}
+              onDismiss={nodeInScene ? () => onDismissIds([neighbor.id]) : null}
+              onReveal={() =>
+                onReveal({
+                  graph,
+                  selection: { type: "node", id: neighbor.id },
+                  focusNodeId: neighbor.id,
+                })
+              }
+            >
+              <div className="rounded-md border border-border bg-background p-3">
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-foreground">
+                      {neighbor.caption}
+                    </div>
+                    <div className="mt-1 break-words text-xs text-muted-foreground">
+                      {neighbor.id}
+                    </div>
                   </div>
-                  <div className="mt-1 break-words text-xs text-muted-foreground">
-                    {neighbor.id}
-                  </div>
+                  <DetailChip>{nodeConnections.length}</DetailChip>
                 </div>
-                <DetailChip>{nodeConnections.length}</DetailChip>
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {neighbor.labels.map((label) => (
+                    <DetailChip key={label}>{label}</DetailChip>
+                  ))}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {nodeConnections.map((connection) => (
+                    <DetailChip key={connection.relationship.id}>
+                      {getDirectionLabel(connection.direction)}{" "}
+                      {connection.relationship.type}
+                    </DetailChip>
+                  ))}
+                </div>
               </div>
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {neighbor.labels.map((label) => (
-                  <DetailChip key={label}>{label}</DetailChip>
-                ))}
-              </div>
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {nodeConnections.map((connection) => (
-                  <DetailChip key={connection.relationship.id}>
-                    {getDirectionLabel(connection.direction)}{" "}
-                    {connection.relationship.type}
-                  </DetailChip>
-                ))}
-              </div>
-            </div>
-          </RevealContextMenu>
-        ))}
+            </RevealContextMenu>
+          )
+        })}
       </div>
     </div>
   )
@@ -2942,9 +2956,13 @@ function NodeEndpoint({
 
 function RevealContextMenu({
   children,
+  label = "Reveal",
+  onDismiss,
   onReveal,
 }: {
   children: React.ReactNode
+  label?: string
+  onDismiss?: (() => void) | null
   onReveal: () => void
 }) {
   return (
@@ -2953,8 +2971,14 @@ function RevealContextMenu({
       <ContextMenuContent className="min-w-36">
         <ContextMenuItem onSelect={onReveal}>
           <Eye className="size-3.5" />
-          Reveal
+          {label}
         </ContextMenuItem>
+        {onDismiss ? (
+          <ContextMenuItem onSelect={onDismiss}>
+            <EyeOff className="size-3.5" />
+            Dismiss
+          </ContextMenuItem>
+        ) : null}
       </ContextMenuContent>
     </ContextMenu>
   )
