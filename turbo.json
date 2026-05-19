@@ -4,6 +4,13 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
+      "env": [
+        "BETTER_AUTH_SECRET",
+        "BETTER_AUTH_URL",
+        "CONNECTIONS_JSON_BASE64",
+        "DATABASE_*",
+        "GRAPH_EXPLORER_NO_AUTH_LOCAL"
+      ],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
       "outputs": [".next/**", "!.next/cache/**"]
     },

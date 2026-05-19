@@ -6,6 +6,8 @@ import { db } from "@/lib/db"
 import * as schema from "@/lib/db/schema"
 import { env } from "@/lib/env"
 
+const trustedOrigins = env.BETTER_AUTH_URL ? [env.BETTER_AUTH_URL] : []
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: "pg",
@@ -14,12 +16,7 @@ export const auth = betterAuth({
   secret:
     env.BETTER_AUTH_SECRET ??
     "development-only-change-me-graph-explorer-secret",
-  trustedOrigins: [
-    env.BETTER_AUTH_URL ?? "",
-    "https://graph-explorer-alpha.vercel.app",
-    "http://localhost:3000",
-    "https://web.localhost",
-  ],
+  trustedOrigins,
   baseURL: env.BETTER_AUTH_URL,
   emailAndPassword: {
     enabled: true,
