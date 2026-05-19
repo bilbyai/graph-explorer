@@ -2,14 +2,14 @@ import { z } from "zod"
 
 import { getRouteAccess, unauthorizedResponse } from "@/lib/auth-guard"
 import { getAdminConnection } from "@/lib/connection-registry"
-import { expandGraph } from "@/lib/neo4j"
-import { sampleGraph } from "@/lib/sample-graph"
+import { expandGraphNodes } from "@/lib/neo4j"
 
 export const runtime = "nodejs"
 
 const requestSchema = z.object({
   connectionId: z.string().min(1),
-  nodeId: z.string().min(1),
+  nodeId: z.string().min(1).optional(),
+  nodeIds: z.array(z.string().min(1)).min(1).max(100).optional(),
   direction: z.enum(["incoming", "outgoing", "both"]).default("both"),
   limit: z.number().int().min(1).max(300).default(80),
   relType: z.string().min(1).optional(),
@@ -28,10 +28,6 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid expand request" }, { status: 400 })
   }
 
-  if (body.data.connectionId === "sample") {
-    return Response.json(sampleGraph)
-  }
-
   const connection = getAdminConnection(body.data.connectionId)
 
   if (!connection) {
@@ -39,9 +35,17 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await expandGraph(
+    const nodeIds = Array.from(
+      new Set(body.data.nodeIds ?? (body.data.nodeId ? [body.data.nodeId] : []))
+    )
+
+    if (nodeIds.length === 0) {
+      return Response.json({ error: "Invalid expand request" }, { status: 400 })
+    }
+
+    const result = await expandGraphNodes(
       connection,
-      body.data.nodeId,
+      nodeIds,
       body.data.direction,
       body.data.limit,
       body.data.relType
@@ -49,6 +53,6 @@ export async function POST(request: Request) {
 
     return Response.json(result.graph)
   } catch {
-    return Response.json(sampleGraph)
+    return Response.json({ error: "Expansion failed" }, { status: 500 })
   }
 }

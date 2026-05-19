@@ -1,9 +1,15 @@
 import { getRouteAccess, unauthorizedResponse } from "@/lib/auth-guard"
 import { getAdminConnection } from "@/lib/connection-registry"
+import type { SchemaPayload } from "@/lib/graph-types"
 import { readSchema } from "@/lib/neo4j"
-import { sampleSchema } from "@/lib/sample-graph"
 
 export const runtime = "nodejs"
+
+const emptySchema: SchemaPayload = {
+  labels: [],
+  relationshipTypes: [],
+  propertyKeys: [],
+}
 
 export async function GET(request: Request) {
   const access = await getRouteAccess(request)
@@ -15,8 +21,8 @@ export async function GET(request: Request) {
   const url = new URL(request.url)
   const connectionId = url.searchParams.get("connectionId")
 
-  if (!connectionId || connectionId === "sample") {
-    return Response.json(sampleSchema)
+  if (!connectionId) {
+    return Response.json(emptySchema)
   }
 
   const connection = getAdminConnection(connectionId)
@@ -28,6 +34,6 @@ export async function GET(request: Request) {
   try {
     return Response.json(await readSchema(connection))
   } catch {
-    return Response.json(sampleSchema)
+    return Response.json(emptySchema)
   }
 }

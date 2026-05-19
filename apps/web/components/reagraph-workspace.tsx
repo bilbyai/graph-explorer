@@ -20,6 +20,8 @@ import {
   EyeOff,
   Loader2,
   Maximize,
+  Minus,
+  Plus,
 } from "lucide-react"
 import dynamic from "next/dynamic"
 import { useTheme } from "next-themes"
@@ -62,6 +64,10 @@ const GraphCanvas = dynamic(
   }
 ) as React.ComponentType<GraphCanvasProps & React.RefAttributes<GraphCanvasRef>>
 
+const autoLabelNodeThreshold = 250
+const lightRenderNodeThreshold = 750
+const lightRenderRelationshipThreshold = 1500
+
 export type GraphSelection =
   | {
       type: "node"
@@ -102,9 +108,10 @@ type ReagraphWorkspaceProps = {
   isLoading?: boolean
   isExpanding?: boolean
   onSelect: (selection: GraphSelection) => void
+  onClearScene?: () => void
   onExpandNodes: (nodeIds: string[], options?: ExpandNodeOptions) => void
   onFetchRelationshipSummary?: (
-    nodeId: string
+    nodeIds: string[]
   ) => Promise<NodeRelationshipSummary>
   onHideId?: (id: string) => void
   onHideIds?: (ids: string[]) => void
@@ -134,6 +141,7 @@ export function ReagraphWorkspace({
   isLoading = false,
   isExpanding = false,
   onSelect,
+  onClearScene,
   onExpandNodes,
   onFetchRelationshipSummary,
   onHideId,
@@ -152,7 +160,13 @@ export function ReagraphWorkspace({
       canvas: { ...base.canvas, background: canvasBackground },
     }
   }, [canvasBackground, resolvedTheme])
+  const [mode, setMode] = React.useState<"2d" | "3d">("2d")
   const hiddenIdSet = React.useMemo(() => new Set(hiddenIds ?? []), [hiddenIds])
+  const [sceneMenuPosition, setSceneMenuPosition] = React.useState<{
+    x: number
+    y: number
+  } | null>(null)
+  const reagraphContextMenuPendingRef = React.useRef(false)
   const visibleNodes = React.useMemo(
     () =>
       graph.nodes.filter(
@@ -176,6 +190,47 @@ export function ReagraphWorkspace({
       ),
     [graph.relationships, visibleNodeIds, hiddenIdSet]
   )
+  const singleNodeIds = React.useMemo(() => {
+    const connectedNodeIds = new Set<string>()
+    for (const relationship of visibleRelationships) {
+      connectedNodeIds.add(relationship.source)
+      connectedNodeIds.add(relationship.target)
+    }
+
+    const ids: string[] = []
+    for (const node of visibleNodes) {
+      if (!connectedNodeIds.has(node.id)) {
+        ids.push(node.id)
+      }
+    }
+
+    return ids
+  }, [visibleNodes, visibleRelationships])
+  const adaptiveRendering = React.useMemo(() => {
+    const nodeCount = visibleNodes.length
+    const relationshipCount = visibleRelationships.length
+    const useLightRendering =
+      isExpanding ||
+      nodeCount >= lightRenderNodeThreshold ||
+      relationshipCount >= lightRenderRelationshipThreshold
+
+    return {
+      animated: !useLightRendering,
+      draggable: !useLightRendering,
+      edgeArrowPosition:
+        useLightRendering || relationshipCount >= autoLabelNodeThreshold
+          ? ("none" as const)
+          : ("end" as const),
+      labelType: isExpanding
+        ? ("none" as const)
+        : nodeCount >= autoLabelNodeThreshold ||
+            relationshipCount >= autoLabelNodeThreshold
+          ? ("auto" as const)
+          : ("all" as const),
+      lassoType: useLightRendering ? ("node" as const) : ("all" as const),
+      useCustomNodeRenderer: mode === "2d" && !useLightRendering,
+    }
+  }, [isExpanding, mode, visibleNodes.length, visibleRelationships.length])
   const styled = React.useMemo(
     () => styleNodes(graph, styling),
     [graph, styling]
@@ -206,10 +261,10 @@ export function ReagraphWorkspace({
         target: relationship.target,
         label: relationship.type,
         fill: getRelationshipColor(relationship.type, styling),
-        arrowPlacement: "end" as const,
+        arrowPlacement: adaptiveRendering.edgeArrowPosition,
         data: relationship,
       })),
-    [visibleRelationships, styling]
+    [adaptiveRendering.edgeArrowPosition, visibleRelationships, styling]
   )
   const visibleRelationshipIds = React.useMemo(
     () => new Set(edges.map((edge) => edge.id)),
@@ -227,7 +282,6 @@ export function ReagraphWorkspace({
     () => ({ nodeStrength: -600, linkDistance: 140 }),
     []
   )
-  const [mode, setMode] = React.useState<"2d" | "3d">("2d")
   const [inspectedRelationshipId, setInspectedRelationshipId] = React.useState<
     string | null
   >(null)
@@ -350,6 +404,17 @@ export function ReagraphWorkspace({
     }
   }, [mode])
 
+  const pendingFocusRef = React.useRef<string[] | null>(null)
+  const prevExpandingRef = React.useRef(isExpanding)
+
+  const handleExpandNodes = React.useCallback(
+    (nodeIds: string[], options?: ExpandNodeOptions) => {
+      pendingFocusRef.current = nodeIds
+      onExpandNodes(nodeIds, options)
+    },
+    [onExpandNodes]
+  )
+
   React.useEffect(() => {
     if (mode !== "3d") return
 
@@ -402,7 +467,7 @@ export function ReagraphWorkspace({
     const onKeyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase()
       if (!(event.metaKey || event.ctrlKey)) return
-      if (key !== "a" && key !== "h") return
+      if (key !== "a" && key !== "e" && key !== "h") return
       if (isEditableKeyboardTarget(event.target)) return
 
       if (key === "a") {
@@ -415,6 +480,17 @@ export function ReagraphWorkspace({
 
       const selectedIds = getGraphSelectionIds(selected)
       if (selectedIds.length === 0) return
+
+      if (key === "e") {
+        const selectedVisibleNodeIds = selectedIds.filter((id) =>
+          visibleNodeIds.has(id)
+        )
+        if (selectedVisibleNodeIds.length === 0) return
+        event.preventDefault()
+        handleExpandNodes(selectedVisibleNodeIds)
+        return
+      }
+
       if (!onHideIds && !onHideId) return
       event.preventDefault()
       if (onHideIds) {
@@ -429,17 +505,57 @@ export function ReagraphWorkspace({
     return () => document.removeEventListener("keydown", onKeyDown)
   }, [
     getSelectionFromVisibleIds,
+    handleExpandNodes,
     onHideId,
     onHideIds,
     onSelect,
     selected,
+    visibleNodeIds,
     visibleSelectionIds,
   ])
 
   const handleCanvasClick = React.useCallback(() => {
     onSelect(null)
     setHoveredNode(null)
+    setSceneMenuPosition(null)
   }, [onSelect])
+
+  const handleWrapperContextMenu = React.useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      event.preventDefault()
+
+      if (reagraphContextMenuPendingRef.current) {
+        reagraphContextMenuPendingRef.current = false
+        return
+      }
+
+      const target = event.target
+      if (target instanceof Element && target.closest("[data-graph-menu]")) {
+        return
+      }
+
+      const rect = wrapperRef.current?.getBoundingClientRect()
+      if (!rect) return
+
+      setHoveredNode(null)
+      setSceneMenuPosition({
+        x: Math.max(8, Math.min(event.clientX - rect.left, rect.width - 360)),
+        y: Math.max(8, Math.min(event.clientY - rect.top, rect.height - 160)),
+      })
+    },
+    []
+  )
+
+  const handleDismissSingleNodes = React.useCallback(() => {
+    if (singleNodeIds.length === 0) return
+    onHideIds?.(singleNodeIds)
+    setSceneMenuPosition(null)
+  }, [onHideIds, singleNodeIds])
+
+  const handleClearScene = React.useCallback(() => {
+    onClearScene?.()
+    setSceneMenuPosition(null)
+  }, [onClearScene])
 
   const toggleSelectionId = React.useCallback(
     (id: string) => {
@@ -508,36 +624,34 @@ export function ReagraphWorkspace({
 
   const handleNodePointerOut = React.useCallback(() => setHoveredNode(null), [])
 
-  const pendingFocusRef = React.useRef<string[] | null>(null)
-  const prevExpandingRef = React.useRef(isExpanding)
+  const fetchCachedRelationshipSummary = React.useCallback(
+    (nodeIds: string[]) => {
+      const fetchSummary = relationshipSummaryFetcherRef.current
+      if (!fetchSummary) {
+        return Promise.reject(new Error("Relationship summary unavailable"))
+      }
 
-  const handleExpandNodes = React.useCallback(
-    (nodeIds: string[], options?: ExpandNodeOptions) => {
-      pendingFocusRef.current = nodeIds
-      onExpandNodes(nodeIds, options)
+      const uniqueNodeIds = Array.from(new Set(nodeIds))
+      const cacheKey = [...uniqueNodeIds].sort().join("\0")
+      const cached = relationshipSummaryCacheRef.current.get(cacheKey)
+      if (cached) return cached
+
+      const request = fetchSummary(uniqueNodeIds).catch((error) => {
+        relationshipSummaryCacheRef.current.delete(cacheKey)
+        throw error
+      })
+      relationshipSummaryCacheRef.current.set(cacheKey, request)
+      return request
     },
-    [onExpandNodes]
+    []
   )
-
-  const fetchCachedRelationshipSummary = React.useCallback((nodeId: string) => {
-    const fetchSummary = relationshipSummaryFetcherRef.current
-    if (!fetchSummary) {
-      return Promise.reject(new Error("Relationship summary unavailable"))
-    }
-
-    const cached = relationshipSummaryCacheRef.current.get(nodeId)
-    if (cached) return cached
-
-    const request = fetchSummary(nodeId).catch((error) => {
-      relationshipSummaryCacheRef.current.delete(nodeId)
-      throw error
-    })
-    relationshipSummaryCacheRef.current.set(nodeId, request)
-    return request
-  }, [])
 
   const handleContextMenu = React.useCallback(
     (event: ContextMenuEvent) => {
+      reagraphContextMenuPendingRef.current = true
+      window.setTimeout(() => {
+        reagraphContextMenuPendingRef.current = false
+      }, 0)
       const targetNodeIds = getContextMenuTargetNodeIds(
         event,
         selected,
@@ -610,8 +724,12 @@ export function ReagraphWorkspace({
 
   return (
     <div
+      aria-label="Graph workspace"
       className="relative h-full min-h-0 overflow-hidden bg-background"
+      onContextMenu={handleWrapperContextMenu}
       ref={wrapperRef}
+      role="application"
+      tabIndex={-1}
     >
       <GraphCanvasErrorBoundary
         key={`${canvasKey}-${mode}`}
@@ -636,15 +754,17 @@ export function ReagraphWorkspace({
           layoutOverrides={layoutOverrides}
           cameraMode={mode === "3d" ? "rotate" : "orthographic"}
           selections={selections}
-          draggable
-          animated
-          labelType="all"
-          edgeArrowPosition="end"
+          draggable={adaptiveRendering.draggable}
+          animated={adaptiveRendering.animated}
+          labelType={adaptiveRendering.labelType}
+          edgeArrowPosition={adaptiveRendering.edgeArrowPosition}
           edgeLabelPosition="natural"
-          lassoType="all"
+          lassoType={adaptiveRendering.lassoType}
           minZoom={0.2}
           maxZoom={80}
-          renderNode={mode === "3d" ? undefined : renderNode}
+          renderNode={
+            adaptiveRendering.useCustomNodeRenderer ? renderNode : undefined
+          }
           contextMenu={handleContextMenu}
           onLassoEnd={handleLassoEnd}
           onCanvasClick={handleCanvasClick}
@@ -674,6 +794,17 @@ export function ReagraphWorkspace({
         </div>
       )}
       {hoveredNode && <NodeHoverCard node={hoveredNode} ref={hoverCardRef} />}
+      {sceneMenuPosition && (
+        <SceneContextMenu
+          position={sceneMenuPosition}
+          singleNodeCount={singleNodeIds.length}
+          canDismissSingleNodes={singleNodeIds.length > 0 && !!onHideIds}
+          canClearScene={!!onClearScene}
+          onClearScene={handleClearScene}
+          onDismissSingleNodes={handleDismissSingleNodes}
+          onClose={() => setSceneMenuPosition(null)}
+        />
+      )}
       {inspectedRelationship && (
         <RelationshipInspectDialog
           relationship={inspectedRelationship}
@@ -718,6 +849,26 @@ export function ReagraphWorkspace({
         </div>
       </TooltipProvider>
       <div className="pointer-events-none absolute right-4 bottom-4 flex flex-col gap-2 rounded-md border border-border bg-muted/90 p-2 text-xs text-muted-foreground shadow-xl">
+        <Button
+          aria-label="Zoom in"
+          className="pointer-events-auto inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 hover:bg-accent"
+          onClick={() => canvasRef.current?.zoomIn()}
+          type="button"
+          variant="outline"
+        >
+          <Plus className="size-3.5" />
+          Zoom in
+        </Button>
+        <Button
+          aria-label="Zoom out"
+          className="pointer-events-auto inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 hover:bg-accent"
+          onClick={() => canvasRef.current?.zoomOut()}
+          type="button"
+          variant="outline"
+        >
+          <Minus className="size-3.5" />
+          Zoom out
+        </Button>
         <Button
           className="pointer-events-auto inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 hover:bg-accent"
           onClick={() => canvasRef.current?.fitNodesInView()}
@@ -896,7 +1047,7 @@ function renderContextMenu(
   targetNodeIds: string[],
   onExpandNodes: (nodeIds: string[], options?: ExpandNodeOptions) => void,
   onFetchRelationshipSummary?: (
-    nodeId: string
+    nodeIds: string[]
   ) => Promise<NodeRelationshipSummary>,
   onHideId?: (id: string) => void,
   onHideIds?: (ids: string[]) => void,
@@ -1114,54 +1265,6 @@ function formatPropertyValue(value: unknown): string {
   }
 }
 
-async function fetchRelationshipSummaries(
-  nodeIds: string[],
-  fetchSummary: (nodeId: string) => Promise<NodeRelationshipSummary>
-): Promise<NodeRelationshipSummary> {
-  const results = await Promise.allSettled(
-    nodeIds.map((nodeId) => fetchSummary(nodeId))
-  )
-  const summaries = results.flatMap((result) =>
-    result.status === "fulfilled" ? [result.value] : []
-  )
-
-  if (summaries.length === 0 && results.length > 0) {
-    throw new Error("Relationship summaries failed")
-  }
-
-  const entries = new Map<
-    string,
-    {
-      type: string
-      direction: NodeRelationshipSummary["entries"][number]["direction"]
-      nodeCount: number
-    }
-  >()
-
-  for (const summary of summaries) {
-    for (const entry of summary.entries) {
-      const key = `${entry.direction}:${entry.type}`
-      const existing = entries.get(key)
-      if (existing) {
-        existing.nodeCount += entry.nodeCount
-      } else {
-        entries.set(key, { ...entry })
-      }
-    }
-  }
-
-  const mergedEntries = Array.from(entries.values()).sort((a, b) =>
-    a.type === b.type
-      ? a.direction.localeCompare(b.direction)
-      : a.type.localeCompare(b.type)
-  )
-
-  return {
-    total: mergedEntries.reduce((sum, entry) => sum + entry.nodeCount, 0),
-    entries: mergedEntries,
-  }
-}
-
 function ExpandMenuItem({
   nodeIds,
   onExpandNodes,
@@ -1171,7 +1274,7 @@ function ExpandMenuItem({
   nodeIds: string[]
   onExpandNodes: (nodeIds: string[], options?: ExpandNodeOptions) => void
   onFetchRelationshipSummary?: (
-    nodeId: string
+    nodeIds: string[]
   ) => Promise<NodeRelationshipSummary>
   onCloseMenu: () => void
 }) {
@@ -1207,7 +1310,7 @@ function ExpandMenuItem({
     setIsLoading(true)
     setHasError(false)
 
-    fetchRelationshipSummaries(nodeIds, onFetchRelationshipSummary)
+    onFetchRelationshipSummary(nodeIds)
       .then((result) => {
         setSummary(result)
       })
@@ -1256,9 +1359,14 @@ function ExpandMenuItem({
           <Maximize className="size-3.5 shrink-0" />
           Expand
         </span>
-        {supportsSubmenu && (
-          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
+        <span className="flex items-center gap-2">
+          <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+            ⌘ E
+          </kbd>
+          {supportsSubmenu && (
+            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+          )}
+        </span>
       </button>
       {supportsSubmenu && isSubmenuOpen && (
         <ExpandSubmenu
@@ -1425,12 +1533,91 @@ function positionHoverCard(
 
 const EMPTY_SELECTIONS: string[] = []
 
-function GraphContextMenu({
-  children,
+function SceneContextMenu({
+  position,
+  singleNodeCount,
+  canDismissSingleNodes,
+  canClearScene,
+  onClearScene,
+  onDismissSingleNodes,
   onClose,
 }: {
-  children: React.ReactNode
+  position: { x: number; y: number }
+  singleNodeCount: number
+  canDismissSingleNodes: boolean
+  canClearScene: boolean
+  onClearScene: () => void
+  onDismissSingleNodes: () => void
   onClose: () => void
+}) {
+  return (
+    <GraphContextMenu
+      className="absolute z-30 min-w-52"
+      onClose={onClose}
+      style={{
+        left: position.x,
+        top: position.y,
+      }}
+    >
+      <button
+        className="flex w-full cursor-pointer items-center rounded-sm p-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+        disabled={!canClearScene}
+        type="button"
+        onClick={onClearScene}
+      >
+        Clear scene
+      </button>
+      <button
+        className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-sm p-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+        disabled={!canDismissSingleNodes}
+        type="button"
+        onClick={onDismissSingleNodes}
+      >
+        <span>Dismiss single nodes</span>
+        {singleNodeCount > 0 && (
+          <span className="text-xs text-muted-foreground">
+            {singleNodeCount}
+          </span>
+        )}
+      </button>
+      <div className="group/export relative">
+        <button
+          aria-haspopup="menu"
+          className="flex w-full cursor-pointer items-center gap-2 rounded-sm p-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none"
+          type="button"
+        >
+          <span>Export</span>
+          <ChevronRight className="ml-auto size-3.5 shrink-0" />
+        </button>
+        <div className="invisible absolute top-0 left-[calc(100%+0.25rem)] min-w-28 rounded-md border border-border bg-popover p-1 opacity-0 shadow-md transition group-focus-within/export:visible group-focus-within/export:opacity-100 group-hover/export:visible group-hover/export:opacity-100">
+          {EXPORT_OPTIONS.map((option) => (
+            <button
+              className="flex w-full items-center rounded-sm p-2 text-sm text-popover-foreground opacity-50"
+              disabled
+              key={option}
+              type="button"
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      </div>
+    </GraphContextMenu>
+  )
+}
+
+const EXPORT_OPTIONS = ["CSV", "PNG", "SVG"] as const
+
+function GraphContextMenu({
+  children,
+  className,
+  onClose,
+  style,
+}: {
+  children: React.ReactNode
+  className?: string
+  onClose: () => void
+  style?: React.CSSProperties
 }) {
   const menuRef = React.useRef<HTMLDivElement>(null)
 
@@ -1463,8 +1650,15 @@ function GraphContextMenu({
 
   return (
     <div
-      className="min-w-40 rounded-md border border-border bg-popover p-1 shadow-md"
+      className={[
+        "min-w-40 rounded-md border border-border bg-popover p-1 shadow-md",
+        className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      data-graph-menu=""
       ref={menuRef}
+      style={style}
     >
       {children}
     </div>

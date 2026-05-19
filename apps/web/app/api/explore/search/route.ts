@@ -3,7 +3,6 @@ import { z } from "zod"
 import { getRouteAccess, unauthorizedResponse } from "@/lib/auth-guard"
 import { getAdminConnection } from "@/lib/connection-registry"
 import { searchGraph } from "@/lib/neo4j"
-import { searchSampleGraph } from "@/lib/sample-graph"
 
 export const runtime = "nodejs"
 
@@ -56,10 +55,6 @@ export async function POST(request: Request) {
       { error: "Invalid graph search request" },
       { status: 400 }
     )
-  }
-
-  if (body.data.connectionId === "sample") {
-    return Response.json(searchSampleGraph(body.data.search))
   }
 
   const connection = getAdminConnection(body.data.connectionId)

@@ -2,6 +2,12 @@
 
 import { Button } from "@workspace/ui/components/button"
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@workspace/ui/components/context-menu"
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -29,7 +35,13 @@ import {
   RadioGroup,
   RadioGroupItem,
 } from "@workspace/ui/components/radio-group"
-import { Tabs, TabsList, TabsTrigger } from "@workspace/ui/components/tabs"
+import { toast } from "@workspace/ui/components/sonner"
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@workspace/ui/components/tabs"
 import { Textarea } from "@workspace/ui/components/textarea"
 import {
   Tooltip,
@@ -76,10 +88,13 @@ import {
   NodeStylingPopoverContent,
   RelationshipStylingPopoverContent,
 } from "@/components/styling-panel"
+import { readAppPreferences, updateAppPreferences } from "@/lib/app-preferences"
 import { authClient } from "@/lib/auth-client"
 import {
-  expandLocalGraph,
-  getLocalNodeRelationshipSummary,
+  closeLocalDriver,
+  expandLocalGraphNodes,
+  getLocalNodeAdjacency,
+  getLocalNodesRelationshipSummary,
   readLocalSchema,
   runLocalReadQuery,
   searchLocalGraph,
@@ -87,7 +102,9 @@ import {
 } from "@/lib/browser-neo4j"
 import { validateReadOnlyMatchQuery } from "@/lib/cypher"
 import type {
+  GraphNodeRecord,
   GraphPayload,
+  GraphRelationshipRecord,
   GraphSearchSuggestion,
   NodeRelationshipSummary,
   QueryResultPayload,
@@ -110,18 +127,14 @@ import {
   listQueryHistory,
   type QueryHistoryEntry,
 } from "@/lib/query-history"
-import {
-  sampleGraph,
-  sampleSchema,
-  searchSampleGraph,
-  suggestSampleGraph,
-} from "@/lib/sample-graph"
 
 const emptySchema: SchemaPayload = {
   labels: [],
   relationshipTypes: [],
   propertyKeys: [],
 }
+
+const noExpansionResultsMessage = "Sorry, we couldn't find any results."
 
 type AdminConnection = {
   id: string
@@ -132,20 +145,17 @@ type AdminConnection = {
   username: string
 }
 
-type SampleConnection = {
-  id: "sample"
-  source: "sample"
-  name: string
-  host: string
-  scheme: string
-  username: string
-}
-
-type ConnectionOption = AdminConnection | LocalConnection | SampleConnection
+type ConnectionOption = AdminConnection | LocalConnection
 
 type StatusDetails = {
   message: string
   debug: Record<string, unknown>
+}
+
+type RevealRequest = {
+  graph: GraphPayload
+  selection: NonNullable<GraphSelection>
+  focusNodeId: string
 }
 
 type ApiErrorPayload = {
@@ -195,21 +205,14 @@ type GraphExplorerAppProps = {
   access: AppAccess
 }
 
-const sampleConnection: SampleConnection = {
-  id: "sample",
-  source: "sample",
-  name: "Sample Graph",
-  host: "browser demo",
-  scheme: "sample",
-  username: "read-only",
-}
-
 const defaultQuery = "MATCH (n)-[r]-(m)\nRETURN n, r, m\nLIMIT 50"
 
 const emptyGraph: GraphPayload = {
   nodes: [],
   relationships: [],
 }
+
+const expandNodeBatchSize = 100
 
 export function GraphExplorerApp({
   initialConnections,
@@ -221,9 +224,12 @@ export function GraphExplorerApp({
   const [localConnections, setLocalConnections] = React.useState<
     LocalConnection[]
   >([])
-  const [selectedConnectionId, setSelectedConnectionId] = React.useState(
-    initialConnections[0]?.id ?? sampleConnection.id
-  )
+  const [localConnectionsLoaded, setLocalConnectionsLoaded] =
+    React.useState(false)
+  const [preferencesRestored, setPreferencesRestored] = React.useState(false)
+  const [selectedConnectionId, setSelectedConnectionId] = React.useState<
+    string | null
+  >(initialConnections[0]?.id ?? null)
   const [graph, setGraph] = React.useState<GraphPayload>(emptyGraph)
   const [schema, setSchema] = React.useState<SchemaPayload>(emptySchema)
   const [isGraphLoading, setIsGraphLoading] = React.useState(false)
@@ -257,55 +263,117 @@ export function GraphExplorerApp({
   const [history, setHistory] = React.useState<QueryHistoryEntry[]>([])
   const [styling, setStyling] = React.useState<StylingState>(emptyStyling)
 
+  const clearScene = React.useCallback(() => {
+    setGraph(emptyGraph)
+    setSelection(null)
+    setSearchTerm("")
+    setSearchSuggestions([])
+    setSearchResultCount(null)
+    setHiddenCategories([])
+    setHiddenIds([])
+    setFocusRequest(null)
+    setStatusDetails(null)
+    setCanvasVersion((version) => version + 1)
+    setStatus("Canvas cleared")
+  }, [])
+
   const connections = React.useMemo<ConnectionOption[]>(
-    () => [sampleConnection, ...initialConnections, ...localConnections],
+    () => [...initialConnections, ...localConnections],
     [initialConnections, localConnections]
   )
   const selectedConnection =
     connections.find((connection) => connection.id === selectedConnectionId) ??
     connections[0] ??
-    sampleConnection
+    null
 
   React.useEffect(() => {
     listLocalConnections()
       .then(setLocalConnections)
       .catch(() => setStatus("Local connection storage is unavailable"))
+      .finally(() => setLocalConnectionsLoaded(true))
     listQueryHistory()
       .then(setHistory)
       .catch(() => undefined)
   }, [])
 
-  const loadSchema = React.useCallback(async (connection: ConnectionOption) => {
-    if (connection.source === "sample") {
-      setSchema(sampleSchema)
+  React.useEffect(() => {
+    if (!localConnectionsLoaded || preferencesRestored) {
       return
     }
 
-    if (connection.source === "local") {
-      try {
-        setSchema(await readLocalSchema(connection))
-      } catch {
-        setSchema(sampleSchema)
-        setStatus("Local schema request failed; showing sample categories")
+    const storedConnectionId = readAppPreferences().selectedConnectionId
+
+    const restoredConnectionId =
+      storedConnectionId &&
+      connections.some((connection) => connection.id === storedConnectionId)
+        ? storedConnectionId
+        : (connections[0]?.id ?? null)
+
+    setSelectedConnectionId(restoredConnectionId)
+
+    setPreferencesRestored(true)
+  }, [connections, localConnectionsLoaded, preferencesRestored])
+
+  React.useEffect(() => {
+    if (!preferencesRestored) {
+      return
+    }
+
+    updateAppPreferences((preferences) => ({
+      ...preferences,
+      selectedConnectionId,
+    }))
+  }, [preferencesRestored, selectedConnectionId])
+
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "s") return
+      if (!event.shiftKey || !(event.metaKey || event.ctrlKey)) return
+
+      event.preventDefault()
+      clearScene()
+    }
+
+    document.addEventListener("keydown", onKeyDown)
+    return () => document.removeEventListener("keydown", onKeyDown)
+  }, [clearScene])
+
+  const loadSchema = React.useCallback(
+    async (connection: ConnectionOption | null) => {
+      if (!connection) {
+        setSchema(emptySchema)
+        return
       }
-      return
-    }
 
-    try {
-      const response = await fetch(
-        `/api/explore/schema?connectionId=${connection.id}`
-      )
-      setSchema(await response.json())
-    } catch {
-      setSchema(sampleSchema)
-    }
-  }, [])
+      if (connection.source === "local") {
+        try {
+          setSchema(await readLocalSchema(connection))
+        } catch {
+          setSchema(emptySchema)
+          setStatus("Local schema request failed")
+        }
+        return
+      }
+
+      try {
+        const response = await fetch(
+          `/api/explore/schema?connectionId=${connection.id}`
+        )
+        setSchema(await response.json())
+      } catch {
+        setSchema(emptySchema)
+      }
+    },
+    []
+  )
 
   const applyGraphSearchResult = React.useCallback(
     (result: GraphPayload, search: string, loadedStatus: string) => {
       const trimmedSearch = search.trim()
 
-      setGraph(result)
+      setGraph((currentGraph) =>
+        trimmedSearch ? mergeGraphs(currentGraph, result) : result
+      )
 
       if (trimmedSearch) {
         const nodeCount = result.nodes.length
@@ -336,23 +404,27 @@ export function GraphExplorerApp({
   )
 
   const loadGraph = React.useCallback(
-    async (connection: ConnectionOption, search: string) => {
+    async (connection: ConnectionOption | null, search: string) => {
+      const trimmedSearch = search.trim()
+
       setStatusDetails(null)
-      setGraph(emptyGraph)
+      if (!connection) {
+        setGraph(emptyGraph)
+        setHiddenIds([])
+        setSearchResultCount(null)
+        setIsGraphLoading(false)
+        setStatus("Add a connection to explore a graph")
+        return
+      }
+
+      if (!trimmedSearch) {
+        setGraph(emptyGraph)
+        setHiddenIds([])
+      }
       setSearchResultCount(null)
-      setHiddenIds([])
       setIsGraphLoading(true)
 
       try {
-        if (connection.source === "sample") {
-          applyGraphSearchResult(
-            searchSampleGraph(search),
-            search,
-            "Loaded sample graph"
-          )
-          return
-        }
-
         if (connection.source === "local") {
           setStatus("Searching local graph from this browser")
 
@@ -360,7 +432,9 @@ export function GraphExplorerApp({
             const result = await searchLocalGraph(connection, search, 120)
             applyGraphSearchResult(result.graph, search, "Local graph loaded")
           } catch (error) {
-            setGraph(emptyGraph)
+            if (!trimmedSearch) {
+              setGraph(emptyGraph)
+            }
             setStatus("Local browser connection failed")
             setStatusDetails({
               message: "Local browser connection failed",
@@ -406,7 +480,9 @@ export function GraphExplorerApp({
             const message =
               payload.error ?? `Graph search failed (${response.status})`
 
-            setGraph(emptyGraph)
+            if (!trimmedSearch) {
+              setGraph(emptyGraph)
+            }
             setStatus(message)
             setStatusDetails({
               message,
@@ -440,7 +516,9 @@ export function GraphExplorerApp({
           )
           setStatusDetails(null)
         } catch (error) {
-          setGraph(emptyGraph)
+          if (!trimmedSearch) {
+            setGraph(emptyGraph)
+          }
           setStatus("Graph request failed")
           setStatusDetails({
             message: "Graph request failed",
@@ -477,8 +555,8 @@ export function GraphExplorerApp({
       return
     }
 
-    if (selectedConnection.source === "sample") {
-      setSearchSuggestions(suggestSampleGraph(trimmedSearch))
+    if (!selectedConnection) {
+      setSearchSuggestions([])
       setIsSearchSuggesting(false)
       return
     }
@@ -585,11 +663,15 @@ export function GraphExplorerApp({
   }, [schemaSearchSuggestions, searchSuggestions])
 
   React.useEffect(() => {
+    if (!preferencesRestored) {
+      return
+    }
+
     setSelection(null)
     setHiddenCategories([])
     void loadSchema(selectedConnection)
     void loadGraph(selectedConnection, "")
-  }, [loadGraph, loadSchema, selectedConnection])
+  }, [loadGraph, loadSchema, preferencesRestored, selectedConnection])
 
   async function expandNodes(
     nodeIds: string[],
@@ -602,8 +684,8 @@ export function GraphExplorerApp({
       return
     }
 
-    if (selectedConnection.source === "sample") {
-      setStatus("Sample graph expansion is already loaded")
+    if (!selectedConnection) {
+      setStatus("Add a connection to expand graph nodes")
       return
     }
 
@@ -623,10 +705,10 @@ export function GraphExplorerApp({
         try {
           let expandedGraph: GraphPayload = emptyGraph
 
-          for (const nodeId of targetNodeIds) {
-            const result = await expandLocalGraph(
+          for (const batch of chunkArray(targetNodeIds, expandNodeBatchSize)) {
+            const result = await expandLocalGraphNodes(
               selectedConnection,
-              nodeId,
+              batch,
               direction,
               120,
               relType
@@ -634,9 +716,17 @@ export function GraphExplorerApp({
             expandedGraph = mergeGraphs(expandedGraph, result.graph)
           }
 
+          if (expandedGraph.nodes.length === 0) {
+            toast.error(noExpansionResultsMessage)
+            setStatus("Local graph expansion returned no results")
+            return
+          }
+
           setGraph((currentGraph) => mergeGraphs(currentGraph, expandedGraph))
+          toast.success(formatExpansionResultMessage(expandedGraph))
           setStatus(`Local ${expansionLabel} expanded from ${targetLabel}`)
         } catch {
+          toast.error(noExpansionResultsMessage)
           setStatus("Local graph expansion failed")
         }
         return
@@ -647,7 +737,7 @@ export function GraphExplorerApp({
       try {
         let expandedGraph: GraphPayload = emptyGraph
 
-        for (const nodeId of targetNodeIds) {
+        for (const batch of chunkArray(targetNodeIds, expandNodeBatchSize)) {
           const response = await fetch("/api/explore/expand", {
             method: "POST",
             headers: {
@@ -655,7 +745,7 @@ export function GraphExplorerApp({
             },
             body: JSON.stringify({
               connectionId: selectedConnection.id,
-              nodeId,
+              nodeIds: batch,
               direction,
               limit: 120,
               relType,
@@ -670,11 +760,19 @@ export function GraphExplorerApp({
           expandedGraph = mergeGraphs(expandedGraph, result)
         }
 
+        if (expandedGraph.nodes.length === 0) {
+          toast.error(noExpansionResultsMessage)
+          setStatus("Expansion returned no results")
+          return
+        }
+
         setGraph((currentGraph) => mergeGraphs(currentGraph, expandedGraph))
+        toast.success(formatExpansionResultMessage(expandedGraph))
         const capitalLabel =
           expansionLabel.charAt(0).toUpperCase() + expansionLabel.slice(1)
         setStatus(`${capitalLabel} expanded from ${targetLabel}`)
       } catch {
+        toast.error(noExpansionResultsMessage)
         setStatus("Expansion failed")
       }
     } finally {
@@ -683,60 +781,14 @@ export function GraphExplorerApp({
   }
 
   async function fetchNodeRelationshipSummary(
-    nodeId: string
+    nodeIds: string[]
   ): Promise<NodeRelationshipSummary> {
-    if (selectedConnection.source === "sample") {
-      const buckets = new Map<
-        string,
-        {
-          nodeIds: Set<string>
-          type: string
-          direction: "incoming" | "outgoing"
-        }
-      >()
-
-      for (const relationship of graph.relationships) {
-        if (relationship.source === nodeId) {
-          const key = `outgoing:${relationship.type}`
-          const bucket = buckets.get(key) ?? {
-            nodeIds: new Set(),
-            type: relationship.type,
-            direction: "outgoing" as const,
-          }
-          bucket.nodeIds.add(relationship.target)
-          buckets.set(key, bucket)
-        } else if (relationship.target === nodeId) {
-          const key = `incoming:${relationship.type}`
-          const bucket = buckets.get(key) ?? {
-            nodeIds: new Set(),
-            type: relationship.type,
-            direction: "incoming" as const,
-          }
-          bucket.nodeIds.add(relationship.source)
-          buckets.set(key, bucket)
-        }
-      }
-
-      const entries = Array.from(buckets.values())
-        .map((bucket) => ({
-          type: bucket.type,
-          direction: bucket.direction,
-          nodeCount: bucket.nodeIds.size,
-        }))
-        .sort((a, b) =>
-          a.type === b.type
-            ? a.direction.localeCompare(b.direction)
-            : a.type.localeCompare(b.type)
-        )
-
-      return {
-        total: entries.reduce((sum, entry) => sum + entry.nodeCount, 0),
-        entries,
-      }
+    if (!selectedConnection) {
+      return { total: 0, entries: [] }
     }
 
     if (selectedConnection.source === "local") {
-      return getLocalNodeRelationshipSummary(selectedConnection, nodeId)
+      return getLocalNodesRelationshipSummary(selectedConnection, nodeIds)
     }
 
     const response = await fetch("/api/explore/relationship-summary", {
@@ -744,7 +796,7 @@ export function GraphExplorerApp({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         connectionId: selectedConnection.id,
-        nodeId,
+        nodeIds,
       }),
     })
 
@@ -783,18 +835,8 @@ export function GraphExplorerApp({
       return
     }
 
-    if (selectedConnection.source === "sample") {
-      const result = sampleQueryResult()
-      setQueryResult(result)
-      setQueryError(null)
-      setStatus("Local/sample query preview stored")
-      const entry = await addQueryHistoryEntry({
-        connectionName: selectedConnection.name,
-        query,
-        params,
-        snapshot: result,
-      })
-      setHistory((currentHistory) => [entry, ...currentHistory].slice(0, 100))
+    if (!selectedConnection) {
+      setQueryError("Add a connection before running a query.")
       return
     }
 
@@ -900,15 +942,43 @@ export function GraphExplorerApp({
     hideIds([id])
   }
 
-  async function deleteConnection(id: string) {
-    await deleteLocalConnection(id)
-    setLocalConnections((currentConnections) =>
-      currentConnections.filter((connection) => connection.id !== id)
-    )
+  function revealGraphItem(request: RevealRequest) {
+    const revealedIds = getGraphSelectionIds(request.selection)
+    const nodeIds = request.graph.nodes.map((node) => node.id)
+    const labels = new Set(request.graph.nodes.flatMap((node) => node.labels))
 
-    if (selectedConnectionId === id) {
-      setSelectedConnectionId(initialConnections[0]?.id ?? sampleConnection.id)
-    }
+    setGraph((currentGraph) => mergeGraphs(currentGraph, request.graph))
+    setHiddenCategories((currentCategories) =>
+      currentCategories.filter((category) => !labels.has(category))
+    )
+    setHiddenIds((currentIds) =>
+      currentIds.filter(
+        (id) => !revealedIds.includes(id) && !nodeIds.includes(id)
+      )
+    )
+    setSelection(request.selection)
+    setFocusRequest((currentRequest) => ({
+      nodeId: request.focusNodeId,
+      version: (currentRequest?.version ?? 0) + 1,
+    }))
+  }
+
+  async function deleteConnection(id: string) {
+    await closeLocalDriver(id)
+    await deleteLocalConnection(id)
+    setLocalConnections((currentConnections) => {
+      const nextConnections = currentConnections.filter(
+        (connection) => connection.id !== id
+      )
+
+      if (selectedConnectionId === id) {
+        setSelectedConnectionId(
+          initialConnections[0]?.id ?? nextConnections[0]?.id ?? null
+        )
+      }
+
+      return nextConnections
+    })
   }
 
   return (
@@ -938,6 +1008,7 @@ export function GraphExplorerApp({
             onToggleCategory={toggleCategory}
             searchSuggestions={visibleSearchSuggestions}
             isSearchSuggesting={isSearchSuggesting}
+            hasConnection={selectedConnection !== null}
             onSearch={() => loadGraph(selectedConnection, searchTerm)}
             onSearchSuggestionSelect={(suggestion) => {
               setSearchTerm(suggestion.searchValue)
@@ -946,39 +1017,34 @@ export function GraphExplorerApp({
             onExpand={expandSelected}
             onHideIds={hideIds}
             selection={selection}
-            onReset={() => {
-              setGraph(emptyGraph)
-              setSelection(null)
-              setSearchTerm("")
-              setSearchSuggestions([])
-              setSearchResultCount(null)
-              setHiddenCategories([])
-              setHiddenIds([])
-              setFocusRequest(null)
-              setStatusDetails(null)
-              setCanvasVersion((version) => version + 1)
-              setStatus("Canvas cleared")
-            }}
+            onReset={clearScene}
           />
           <section className="min-h-0 border-x border-border max-lg:h-[58vh]">
-            <ReagraphWorkspace
-              graph={graph}
-              canvasKey={canvasVersion}
-              focusRequest={focusRequest}
-              hiddenCategories={hiddenCategories}
-              hiddenIds={hiddenIds}
-              styling={styling}
-              selected={selection}
-              isLoading={isGraphLoading}
-              isExpanding={isGraphExpanding}
-              onSelect={setSelection}
-              onExpandNodes={(nodeIds, options) =>
-                void expandNodes(nodeIds, options)
-              }
-              onFetchRelationshipSummary={fetchNodeRelationshipSummary}
-              onHideId={hideId}
-              onHideIds={hideIds}
-            />
+            {selectedConnection ? (
+              <ReagraphWorkspace
+                graph={graph}
+                canvasKey={canvasVersion}
+                focusRequest={focusRequest}
+                hiddenCategories={hiddenCategories}
+                hiddenIds={hiddenIds}
+                styling={styling}
+                selected={selection}
+                isLoading={isGraphLoading}
+                isExpanding={isGraphExpanding}
+                onSelect={setSelection}
+                onClearScene={clearScene}
+                onExpandNodes={(nodeIds, options) =>
+                  void expandNodes(nodeIds, options)
+                }
+                onFetchRelationshipSummary={fetchNodeRelationshipSummary}
+                onHideId={hideId}
+                onHideIds={hideIds}
+              />
+            ) : (
+              <NoConnectionState
+                onAddConnection={() => setShowConnectionManager(true)}
+              />
+            )}
           </section>
           <DetailsPanel
             graph={graph}
@@ -986,6 +1052,8 @@ export function GraphExplorerApp({
             connection={selectedConnection}
             status={status}
             statusDetails={statusDetails}
+            onDismissIds={hideIds}
+            onReveal={revealGraphItem}
           />
         </section>
       ) : (
@@ -1010,7 +1078,7 @@ export function GraphExplorerApp({
       {showConnectionManager ? (
         <ConnectionManagerDialog
           connections={connections}
-          selectedConnectionId={selectedConnection.id}
+          selectedConnectionId={selectedConnection?.id ?? null}
           onClose={() => setShowConnectionManager(false)}
           onDelete={deleteConnection}
           onSelect={setSelectedConnectionId}
@@ -1039,7 +1107,7 @@ function TopBar({
 }: {
   access: AppAccess
   connections: ConnectionOption[]
-  selectedConnection: ConnectionOption
+  selectedConnection: ConnectionOption | null
   activeTab: "explore" | "query"
   onTabChange: (tab: "explore" | "query") => void
   onConnectionChange: (id: string) => void
@@ -1074,14 +1142,16 @@ function TopBar({
             >
               <span className="flex min-w-0 items-center gap-2">
                 <Database className="size-4 text-primary" />
-                <span className="truncate">{selectedConnection.name}</span>
+                <span className="truncate">
+                  {selectedConnection?.name ?? "Add connection"}
+                </span>
               </span>
               <ChevronDown className="size-3.5 text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
             <DropdownMenuRadioGroup
-              value={selectedConnection.id}
+              value={selectedConnection?.id ?? ""}
               onValueChange={onConnectionChange}
             >
               {connections.map((connection) => (
@@ -1184,6 +1254,37 @@ function TopBar({
   )
 }
 
+function NoConnectionState({
+  onAddConnection,
+}: {
+  onAddConnection: () => void
+}) {
+  return (
+    <div className="flex h-full min-h-0 items-center justify-center p-6">
+      <div className="max-w-sm rounded-lg border border-dashed border-border bg-card p-6 text-center shadow-sm">
+        <div className="mx-auto mb-4 flex size-10 items-center justify-center rounded-md border border-primary/30 bg-primary/10 text-primary">
+          <Database className="size-5" />
+        </div>
+        <h2 className="text-sm font-medium text-foreground">
+          Add a Neo4j connection
+        </h2>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          Configure an admin connection or save a browser-local connection to
+          start exploring graph data.
+        </p>
+        <Button
+          className="mt-4 inline-flex h-8 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          onClick={onAddConnection}
+          type="button"
+        >
+          <Plus className="size-3.5" />
+          Add connection
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function ExploreLeftPanel({
   searchTerm,
   searchResultCount,
@@ -1196,6 +1297,7 @@ function ExploreLeftPanel({
   onToggleCategory,
   searchSuggestions,
   isSearchSuggesting,
+  hasConnection,
   onSearch,
   onSearchSuggestionSelect,
   onExpand,
@@ -1214,6 +1316,7 @@ function ExploreLeftPanel({
   onToggleCategory: (category: string) => void
   searchSuggestions: GraphSearchSuggestion[]
   isSearchSuggesting: boolean
+  hasConnection: boolean
   onSearch: () => void
   onSearchSuggestionSelect: (suggestion: GraphSearchSuggestion) => void
   onExpand: () => void
@@ -1329,6 +1432,7 @@ function ExploreLeftPanel({
             className="h-auto min-w-0 flex-1 bg-transparent px-0 text-sm outline-none placeholder:text-muted-foreground"
             id="explore-search"
             placeholder="Search nodes"
+            disabled={!hasConnection}
             value={searchTerm}
             onChange={(event) => handleSearchTermChange(event.target.value)}
             onFocus={() => setSuggestionsOpen(true)}
@@ -1369,7 +1473,9 @@ function ExploreLeftPanel({
                 }
 
                 setSuggestionsOpen(false)
-                onSearch()
+                if (hasConnection) {
+                  onSearch()
+                }
               }
             }}
           />
@@ -1450,6 +1556,7 @@ function ExploreLeftPanel({
         ) : null}
         <Button
           className="h-8 rounded-md border border-border text-xs hover:bg-accent"
+          disabled={!hasConnection}
           onClick={onReset}
           type="button"
           variant="outline"
@@ -1888,12 +1995,16 @@ function DetailsPanel({
   connection,
   status,
   statusDetails,
+  onDismissIds,
+  onReveal,
 }: {
   graph: GraphPayload
   selected: GraphSelection
-  connection: ConnectionOption
+  connection: ConnectionOption | null
   status: string
   statusDetails: StatusDetails | null
+  onDismissIds: (ids: string[]) => void
+  onReveal: (request: RevealRequest) => void
 }) {
   const node =
     selected?.type === "node"
@@ -1929,19 +2040,14 @@ function DetailsPanel({
       className="flex min-h-0 flex-col gap-4 bg-card p-4 max-xl:hidden"
     >
       <PanelSection icon={<BadgeInfo className="size-4" />} title="Selection">
-        {node ? (
-          <InspectorBlock
-            title={node.caption}
-            rows={{
-              Labels: node.labels.join(", "),
-              Degree: String(
-                graph.relationships.filter(
-                  (item) => item.source === node.id || item.target === node.id
-                ).length
-              ),
-              Id: node.id,
-            }}
-            properties={node.properties}
+        {node && connection ? (
+          <NodeInspector
+            key={`${connection.id}:${node.id}`}
+            connection={connection}
+            graph={graph}
+            node={node}
+            onDismissIds={onDismissIds}
+            onReveal={onReveal}
           />
         ) : relationship ? (
           <InspectorBlock
@@ -1970,12 +2076,22 @@ function DetailsPanel({
 
       <PanelSection icon={<Database className="size-4" />} title="Connection">
         <div className="space-y-2 text-sm">
-          <div className="font-medium text-foreground">{connection.name}</div>
-          <div className="text-muted-foreground">{connection.host}</div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Lock className="size-3.5 text-primary" />
-            {connection.scheme}
-          </div>
+          {connection ? (
+            <>
+              <div className="font-medium text-foreground">
+                {connection.name}
+              </div>
+              <div className="text-muted-foreground">{connection.host}</div>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Lock className="size-3.5 text-primary" />
+                {connection.scheme}
+              </div>
+            </>
+          ) : (
+            <div className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
+              No connection selected.
+            </div>
+          )}
         </div>
       </PanelSection>
 
@@ -2079,7 +2195,7 @@ function QueryWorkspace({
   result: QueryResultPayload | null
   error: string | null
   history: QueryHistoryEntry[]
-  selectedConnection: ConnectionOption
+  selectedConnection: ConnectionOption | null
   onQueryChange: (query: string) => void
   onParamsTextChange: (params: string) => void
   onRunQuery: () => void
@@ -2099,6 +2215,7 @@ function QueryWorkspace({
               </div>
               <Button
                 className="inline-flex h-8 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                disabled={!selectedConnection}
                 onClick={onRunQuery}
                 type="button"
               >
@@ -2129,7 +2246,7 @@ function QueryWorkspace({
             <div className="flex h-10 items-center justify-between border-b border-border px-3 text-sm">
               <span>Results</span>
               <span className="text-xs text-muted-foreground">
-                {selectedConnection.name}
+                {selectedConnection?.name ?? "No connection"}
               </span>
             </div>
             <ResultTable result={result} />
@@ -2226,7 +2343,7 @@ function ConnectionManagerDialog({
   onSaved,
 }: {
   connections: ConnectionOption[]
-  selectedConnectionId: string
+  selectedConnectionId: string | null
   onClose: () => void
   onDelete: (id: string) => Promise<void>
   onSelect: (id: string) => void
@@ -2412,11 +2529,7 @@ function getConnectionSourceLabel(connection: ConnectionOption) {
     return "Admin"
   }
 
-  if (connection.source === "local") {
-    return "Local"
-  }
-
-  return "Sample"
+  return "Local"
 }
 
 function PanelSection({
@@ -2436,6 +2549,479 @@ function PanelSection({
       </div>
       {children}
     </section>
+  )
+}
+
+type NodeConnection = {
+  relationship: GraphRelationshipRecord
+  neighbor: GraphNodeRecord
+  direction: "incoming" | "outgoing" | "self"
+}
+
+async function loadNodeAdjacency(
+  connection: ConnectionOption,
+  nodeId: string
+): Promise<GraphPayload> {
+  if (connection.source === "local") {
+    const result = await getLocalNodeAdjacency(connection, nodeId)
+
+    return result.graph
+  }
+
+  const response = await fetch("/api/explore/adjacency", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      connectionId: connection.id,
+      nodeId,
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error("Adjacency request failed")
+  }
+
+  return (await response.json()) as GraphPayload
+}
+
+function NodeInspector({
+  connection,
+  graph,
+  node,
+  onDismissIds,
+  onReveal,
+}: {
+  connection: ConnectionOption
+  graph: GraphPayload
+  node: GraphNodeRecord
+  onDismissIds: (ids: string[]) => void
+  onReveal: (request: RevealRequest) => void
+}) {
+  const [adjacencyState, setAdjacencyState] = React.useState<{
+    graph: GraphPayload | null
+    status: "loading" | "loaded" | "error"
+  }>({ graph: null, status: "loading" })
+  const inspectedGraph = adjacencyState.graph ?? graph
+  const inspectedNode =
+    inspectedGraph.nodes.find((graphNode) => graphNode.id === node.id) ?? node
+  const connections = getNodeConnections(inspectedNode, inspectedGraph)
+  const neighborCount = new Set(connections.map((item) => item.neighbor.id))
+    .size
+
+  React.useEffect(() => {
+    let active = true
+
+    loadNodeAdjacency(connection, node.id)
+      .then((nextAdjacency) => {
+        if (!active) return
+        setAdjacencyState({ graph: nextAdjacency, status: "loaded" })
+      })
+      .catch(() => {
+        if (!active) return
+        setAdjacencyState({ graph: null, status: "error" })
+      })
+
+    return () => {
+      active = false
+    }
+  }, [connection, node.id])
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="break-words text-base font-medium">
+          {inspectedNode.caption}
+        </h3>
+        {adjacencyState.status === "loading" ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Loading database neighbors and relationships.
+          </p>
+        ) : null}
+        {adjacencyState.status === "error" ? (
+          <p className="mt-1 text-xs text-destructive">
+            Could not load database neighbors. Showing scene data.
+          </p>
+        ) : null}
+      </div>
+
+      <Tabs defaultValue="properties">
+        <TabsList className="grid h-9 w-full grid-cols-3">
+          <TabsTrigger value="properties">Properties</TabsTrigger>
+          <TabsTrigger value="neighbors">Neighbors</TabsTrigger>
+          <TabsTrigger value="relationships">Relationships</TabsTrigger>
+        </TabsList>
+        <TabsContent className="pt-2" value="properties">
+          <NodePropertiesTab
+            node={inspectedNode}
+            relationshipCount={connections.length}
+          />
+        </TabsContent>
+        <TabsContent className="pt-2" value="neighbors">
+          <NodeNeighborsTab
+            connections={connections}
+            graph={inspectedGraph}
+            neighborCount={neighborCount}
+            onReveal={onReveal}
+          />
+        </TabsContent>
+        <TabsContent className="pt-2" value="relationships">
+          <NodeRelationshipsTab
+            connections={connections}
+            graph={inspectedGraph}
+            sceneGraph={graph}
+            onDismissIds={onDismissIds}
+            onReveal={onReveal}
+            selectedNode={inspectedNode}
+          />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+function NodePropertiesTab({
+  node,
+  relationshipCount,
+}: {
+  node: GraphNodeRecord
+  relationshipCount: number
+}) {
+  return (
+    <div className="space-y-4">
+      <dl className="space-y-2 text-sm">
+        <div className="grid grid-cols-[90px_minmax(0,1fr)] gap-3">
+          <dt className="text-muted-foreground">Labels</dt>
+          <dd className="break-words text-foreground">
+            {node.labels.join(", ")}
+          </dd>
+        </div>
+        <div className="grid grid-cols-[90px_minmax(0,1fr)] gap-3">
+          <dt className="text-muted-foreground">Degree</dt>
+          <dd className="break-words text-foreground">{relationshipCount}</dd>
+        </div>
+        <div className="grid grid-cols-[90px_minmax(0,1fr)] gap-3">
+          <dt className="text-muted-foreground">Id</dt>
+          <dd className="break-words text-foreground">{node.id}</dd>
+        </div>
+      </dl>
+      <PropertiesPreview properties={node.properties} />
+    </div>
+  )
+}
+
+function NodeNeighborsTab({
+  connections,
+  graph,
+  neighborCount,
+  onReveal,
+}: {
+  connections: NodeConnection[]
+  graph: GraphPayload
+  neighborCount: number
+  onReveal: (request: RevealRequest) => void
+}) {
+  const byNode = new Map<
+    string,
+    {
+      node: GraphNodeRecord
+      connections: NodeConnection[]
+    }
+  >()
+
+  for (const connection of connections) {
+    const current = byNode.get(connection.neighbor.id)
+    if (current) {
+      current.connections.push(connection)
+    } else {
+      byNode.set(connection.neighbor.id, {
+        node: connection.neighbor,
+        connections: [connection],
+      })
+    }
+  }
+
+  const neighbors = Array.from(byNode.values())
+
+  if (neighbors.length === 0) {
+    return (
+      <EmptySelectionMessage>
+        No connected nodes are in the scene.
+      </EmptySelectionMessage>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <DetailChip>{neighborCount} nodes</DetailChip>
+        <DetailChip>{connections.length} relationships</DetailChip>
+      </div>
+      <div className="space-y-2">
+        {neighbors.map(({ node: neighbor, connections: nodeConnections }) => (
+          <RevealContextMenu
+            key={neighbor.id}
+            onReveal={() =>
+              onReveal({
+                graph,
+                selection: { type: "node", id: neighbor.id },
+                focusNodeId: neighbor.id,
+              })
+            }
+          >
+            <div className="rounded-md border border-border bg-background p-3">
+              <div className="flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium text-foreground">
+                    {neighbor.caption}
+                  </div>
+                  <div className="mt-1 break-words text-xs text-muted-foreground">
+                    {neighbor.id}
+                  </div>
+                </div>
+                <DetailChip>{nodeConnections.length}</DetailChip>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {neighbor.labels.map((label) => (
+                  <DetailChip key={label}>{label}</DetailChip>
+                ))}
+              </div>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {nodeConnections.map((connection) => (
+                  <DetailChip key={connection.relationship.id}>
+                    {getDirectionLabel(connection.direction)}{" "}
+                    {connection.relationship.type}
+                  </DetailChip>
+                ))}
+              </div>
+            </div>
+          </RevealContextMenu>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function NodeRelationshipsTab({
+  connections,
+  graph,
+  sceneGraph,
+  onDismissIds,
+  onReveal,
+  selectedNode,
+}: {
+  connections: NodeConnection[]
+  graph: GraphPayload
+  sceneGraph: GraphPayload
+  onDismissIds: (ids: string[]) => void
+  onReveal: (request: RevealRequest) => void
+  selectedNode: GraphNodeRecord
+}) {
+  if (connections.length === 0) {
+    return (
+      <EmptySelectionMessage>
+        No connected relationships are in the scene.
+      </EmptySelectionMessage>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      {connections.map((connection) => {
+        const sourceIsSelected =
+          connection.relationship.source === selectedNode.id
+        const targetIsSelected =
+          connection.relationship.target === selectedNode.id
+        const sourceNode = sourceIsSelected ? selectedNode : connection.neighbor
+        const targetNode = targetIsSelected ? selectedNode : connection.neighbor
+        const propertyCount = Object.keys(
+          connection.relationship.properties
+        ).length
+        const relationshipInScene = sceneGraph.relationships.some(
+          (relationship) => relationship.id === connection.relationship.id
+        )
+
+        return (
+          <RelationshipContextMenu
+            key={connection.relationship.id}
+            relationshipInScene={relationshipInScene}
+            onDismiss={() => onDismissIds([connection.relationship.id])}
+            onJump={() =>
+              onReveal({
+                graph,
+                selection: {
+                  type: "relationship",
+                  id: connection.relationship.id,
+                },
+                focusNodeId: connection.relationship.source,
+              })
+            }
+            onReveal={() =>
+              onReveal({
+                graph,
+                selection: {
+                  type: "relationship",
+                  id: connection.relationship.id,
+                },
+                focusNodeId: connection.relationship.source,
+              })
+            }
+          >
+            <div className="overflow-hidden rounded-md border border-primary/40 bg-background">
+              <div className="grid grid-cols-[minmax(0,1fr)_minmax(96px,120px)_minmax(0,1fr)] items-stretch text-xs">
+                <NodeEndpoint
+                  active={sourceIsSelected}
+                  labels={sourceNode.labels}
+                  title={sourceNode.caption}
+                />
+                <div className="flex min-w-0 flex-col items-center justify-center border-x border-border px-2 py-3">
+                  <div className="max-w-full truncate rounded-full bg-primary/10 px-2 py-1 font-semibold text-primary">
+                    {connection.relationship.type}
+                  </div>
+                  <div className="mt-2 flex w-full items-center gap-1 text-muted-foreground">
+                    <span className="h-px flex-1 bg-muted-foreground/60" />
+                    <span>-&gt;</span>
+                  </div>
+                </div>
+                <NodeEndpoint
+                  active={targetIsSelected}
+                  labels={targetNode.labels}
+                  title={targetNode.caption}
+                />
+              </div>
+              <div className="border-t border-border p-3">
+                <div className="mb-2 flex items-center justify-between gap-2 text-xs">
+                  <span className="font-medium text-foreground">
+                    Edge {connection.relationship.id}
+                  </span>
+                  <DetailChip>
+                    <Plus className="mr-1 size-3" />
+                    {propertyCount}{" "}
+                    {propertyCount === 1 ? "property" : "properties"}
+                  </DetailChip>
+                </div>
+                {propertyCount > 0 ? (
+                  <PropertiesPreview
+                    properties={connection.relationship.properties}
+                  />
+                ) : (
+                  <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
+                    No edge properties.
+                  </div>
+                )}
+              </div>
+            </div>
+          </RelationshipContextMenu>
+        )
+      })}
+    </div>
+  )
+}
+
+function NodeEndpoint({
+  active,
+  labels,
+  title,
+}: {
+  active: boolean
+  labels: string[]
+  title: string
+}) {
+  return (
+    <div className={`min-w-0 p-3 ${active ? "bg-primary/10" : ""}`}>
+      <div className="line-clamp-2 text-foreground">{title}</div>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {labels.map((label) => (
+          <DetailChip key={label}>{label}</DetailChip>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function RevealContextMenu({
+  children,
+  onReveal,
+}: {
+  children: React.ReactNode
+  onReveal: () => void
+}) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="min-w-36">
+        <ContextMenuItem onSelect={onReveal}>
+          <Eye className="size-3.5" />
+          Reveal
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  )
+}
+
+function RelationshipContextMenu({
+  children,
+  relationshipInScene,
+  onDismiss,
+  onJump,
+  onReveal,
+}: {
+  children: React.ReactNode
+  relationshipInScene: boolean
+  onDismiss: () => void
+  onJump: () => void
+  onReveal: () => void
+}) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="min-w-44">
+        {relationshipInScene ? (
+          <>
+            <ContextMenuItem onSelect={onJump}>
+              <Eye className="size-3.5" />
+              Jump to relationship
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={onDismiss}>
+              <EyeOff className="size-3.5" />
+              Dismiss
+            </ContextMenuItem>
+          </>
+        ) : (
+          <ContextMenuItem onSelect={onReveal}>
+            <Eye className="size-3.5" />
+            Reveal
+          </ContextMenuItem>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
+  )
+}
+
+function PropertiesPreview({
+  properties,
+}: {
+  properties: Record<string, unknown>
+}) {
+  return (
+    <pre className="max-h-80 overflow-auto rounded-md border border-border bg-background p-3 text-xs leading-5 text-muted-foreground">
+      {JSON.stringify(properties, null, 2)}
+    </pre>
+  )
+}
+
+function DetailChip({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex min-w-0 items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+      {children}
+    </span>
+  )
+}
+
+function EmptySelectionMessage({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+      {children}
+    </div>
   )
 }
 
@@ -2534,23 +3120,64 @@ function getNodeIdsFromIds(ids: string[], graph: GraphPayload) {
   })
 }
 
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = []
+
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size))
+  }
+
+  return chunks
+}
+
+function formatExpansionResultMessage(graph: GraphPayload) {
+  const nodeCount = graph.nodes.length
+  const relationshipCount = graph.relationships.length
+
+  return `${nodeCount} ${nodeCount === 1 ? "node" : "nodes"} and ${relationshipCount} ${relationshipCount === 1 ? "relationship" : "relationships"} are found.`
+}
+
 function getSelectionNodeIds(selection: GraphSelection, graph: GraphPayload) {
   return getNodeIdsFromIds(getGraphSelectionIds(selection), graph)
 }
 
-function sampleQueryResult(): QueryResultPayload {
-  return {
-    columns: ["n", "r", "m"],
-    rows: sampleGraph.relationships.slice(0, 10).map((relationship) => ({
-      n: sampleGraph.nodes.find((node) => node.id === relationship.source),
-      r: relationship,
-      m: sampleGraph.nodes.find((node) => node.id === relationship.target),
-    })),
-    graph: sampleGraph,
-    summary: {
-      records: Math.min(sampleGraph.relationships.length, 10),
-    },
+function getNodeConnections(node: GraphNodeRecord, graph: GraphPayload) {
+  const nodesById = new Map(
+    graph.nodes.map((graphNode) => [graphNode.id, graphNode] as const)
+  )
+  const connections: NodeConnection[] = []
+
+  for (const relationship of graph.relationships) {
+    if (relationship.source !== node.id && relationship.target !== node.id) {
+      continue
+    }
+
+    const neighborId =
+      relationship.source === node.id
+        ? relationship.target
+        : relationship.source
+    const neighbor = nodesById.get(neighborId)
+    if (!neighbor) continue
+
+    connections.push({
+      relationship,
+      neighbor,
+      direction:
+        relationship.source === relationship.target
+          ? "self"
+          : relationship.source === node.id
+            ? "outgoing"
+            : "incoming",
+    })
   }
+
+  return connections
+}
+
+function getDirectionLabel(direction: NodeConnection["direction"]) {
+  if (direction === "incoming") return "In"
+  if (direction === "outgoing") return "Out"
+  return "Self"
 }
 
 function getRowKey(row: Record<string, unknown>) {

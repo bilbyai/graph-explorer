@@ -18,7 +18,7 @@ export const auth = betterAuth({
     env.BETTER_AUTH_URL,
     "https://graph-explorer-alpha.vercel.app",
     "http://localhost:3000",
-    "https://graph-explorer.localhost",
+    "https://web.localhost",
   ],
   baseURL: env.BETTER_AUTH_URL,
   emailAndPassword: {

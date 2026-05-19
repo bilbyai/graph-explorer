@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto"
 import neo4j, {
+  type Driver,
   type Node as Neo4jNode,
   type Relationship as Neo4jRelationship,
   type Path,
@@ -14,9 +16,33 @@ import type {
   QueryResultPayload,
   SchemaPayload,
 } from "@/lib/graph-types"
-import { getCategoryColor } from "@/lib/sample-graph"
+import { getDefaultLabelColor as getCategoryColor } from "@/lib/node-styling"
 
 type QueryParams = Record<string, unknown>
+
+type GraphAccumulator = {
+  graph: GraphPayload
+  nodeIds: Set<string>
+  relationshipIds: Set<string>
+}
+
+type CachedDriver = {
+  driver: Driver
+  fingerprint: string
+}
+
+const drivers = new Map<string, CachedDriver>()
+
+function createGraphAccumulator(): GraphAccumulator {
+  return {
+    graph: {
+      nodes: [],
+      relationships: [],
+    },
+    nodeIds: new Set(),
+    relationshipIds: new Set(),
+  }
+}
 
 function isNeo4jNode(value: unknown): value is Neo4jNode {
   return (
@@ -124,57 +150,152 @@ export function serializeRelationship(
   }
 }
 
-function mergeGraphValue(value: unknown, graph: GraphPayload) {
+function mergeGraphValue(value: unknown, accumulator: GraphAccumulator) {
   if (isNeo4jNode(value)) {
-    addNode(graph, serializeNode(value))
+    addNode(accumulator, serializeNode(value))
     return
   }
 
   if (isNeo4jRelationship(value)) {
-    addRelationship(graph, serializeRelationship(value))
+    addRelationship(accumulator, serializeRelationship(value))
     return
   }
 
   if (isNeo4jPath(value)) {
     for (const segment of value.segments) {
-      addNode(graph, serializeNode(segment.start))
-      addNode(graph, serializeNode(segment.end))
-      addRelationship(graph, serializeRelationship(segment.relationship))
+      addNode(accumulator, serializeNode(segment.start))
+      addNode(accumulator, serializeNode(segment.end))
+      addRelationship(accumulator, serializeRelationship(segment.relationship))
     }
     return
   }
 
   if (Array.isArray(value)) {
     for (const item of value) {
-      mergeGraphValue(item, graph)
+      mergeGraphValue(item, accumulator)
     }
   }
 }
 
-function addNode(graph: GraphPayload, node: GraphNodeRecord) {
-  if (!graph.nodes.some((existingNode) => existingNode.id === node.id)) {
-    graph.nodes.push(node)
+function addNode(accumulator: GraphAccumulator, node: GraphNodeRecord) {
+  if (!accumulator.nodeIds.has(node.id)) {
+    accumulator.nodeIds.add(node.id)
+    accumulator.graph.nodes.push(node)
   }
 }
 
 function addRelationship(
-  graph: GraphPayload,
+  accumulator: GraphAccumulator,
   relationship: GraphRelationshipRecord
 ) {
-  if (
-    !graph.relationships.some(
-      (existingRelationship) => existingRelationship.id === relationship.id
-    )
-  ) {
-    graph.relationships.push(relationship)
+  if (!accumulator.relationshipIds.has(relationship.id)) {
+    accumulator.relationshipIds.add(relationship.id)
+    accumulator.graph.relationships.push(relationship)
   }
 }
 
 function getDriver(connection: AdminConnection) {
-  return neo4j.driver(
+  const fingerprint = createHash("sha256")
+    .update(
+      `${connection.connection_url}\0${connection.username}\0${connection.password}`
+    )
+    .digest("hex")
+  const cached = drivers.get(connection.id)
+
+  if (cached?.fingerprint === fingerprint) {
+    return cached.driver
+  }
+
+  if (cached) {
+    void cached.driver.close().catch(() => undefined)
+  }
+
+  const driver = neo4j.driver(
     connection.connection_url,
     neo4j.auth.basic(connection.username, connection.password)
   )
+
+  drivers.set(connection.id, {
+    driver,
+    fingerprint,
+  })
+
+  return driver
+}
+
+export async function closeNeo4jDrivers() {
+  const cachedDrivers = Array.from(drivers.values())
+  drivers.clear()
+
+  await Promise.all(cachedDrivers.map(({ driver }) => driver.close()))
+}
+
+function getExpansionPattern(direction: "incoming" | "outgoing" | "both") {
+  return direction === "incoming"
+    ? "(n)<-[r]-(m)"
+    : direction === "outgoing"
+      ? "(n)-[r]->(m)"
+      : "(n)-[r]-(m)"
+}
+
+function getExpansionTypeFilter(relType?: string) {
+  return relType ? "WHERE type(r) = $relType" : ""
+}
+
+function getExpansionParams(
+  nodeIds: string[],
+  limit: number,
+  relType?: string
+) {
+  const params: QueryParams = { nodeIds, limit: neo4j.int(limit) }
+
+  if (relType) {
+    params.relType = relType
+  }
+
+  return params
+}
+
+function getLegacyExpansionParams(
+  nodeId: string,
+  limit: number,
+  relType?: string
+) {
+  const params: QueryParams = { nodeId, limit: neo4j.int(limit) }
+
+  if (relType) {
+    params.relType = relType
+  }
+
+  return params
+}
+
+function getLegacyExpansionTypeFilter(relType?: string) {
+  return relType ? " AND type(r) = $relType" : ""
+}
+
+function getLegacyExpansionQuery(
+  direction: "incoming" | "outgoing" | "both",
+  relType?: string
+) {
+  return `MATCH ${getExpansionPattern(direction)} WHERE elementId(n) = $nodeId${getLegacyExpansionTypeFilter(relType)} RETURN n, r, m LIMIT $limit`
+}
+
+function getBatchExpansionQuery(
+  direction: "incoming" | "outgoing" | "both",
+  relType?: string
+) {
+  return `UNWIND $nodeIds AS nodeId
+MATCH (n)
+WHERE elementId(n) = nodeId
+CALL {
+  WITH n
+  MATCH ${getExpansionPattern(direction)}
+  ${getExpansionTypeFilter(relType)}
+  RETURN r, m
+  LIMIT $limit
+}
+RETURN n, r, m`
 }
 
 export async function runReadQuery(
@@ -191,17 +312,14 @@ export async function runReadQuery(
     const result = await session.run(query, params, {
       timeout: 15_000,
     })
-    const graph: GraphPayload = {
-      nodes: [],
-      relationships: [],
-    }
+    const accumulator = createGraphAccumulator()
     const rows = result.records.map((record) => {
       const row: Record<string, unknown> = {}
 
       for (const key of record.keys) {
         const value = record.get(key)
         row[String(key)] = toPlainValue(value)
-        mergeGraphValue(value, graph)
+        mergeGraphValue(value, accumulator)
       }
 
       return row
@@ -210,7 +328,7 @@ export async function runReadQuery(
     return {
       columns: result.records[0]?.keys.map(String) ?? [],
       rows,
-      graph,
+      graph: accumulator.graph,
       summary: {
         resultAvailableAfter: result.summary.resultAvailableAfter?.toNumber(),
         resultConsumedAfter: result.summary.resultConsumedAfter?.toNumber(),
@@ -219,7 +337,6 @@ export async function runReadQuery(
     }
   } finally {
     await session.close()
-    await driver.close()
   }
 }
 
@@ -472,41 +589,59 @@ export async function expandGraph(
   limit = 80,
   relType?: string
 ) {
-  const pattern =
-    direction === "incoming"
-      ? "(n)<-[r]-(m)"
-      : direction === "outgoing"
-        ? "(n)-[r]->(m)"
-        : "(n)-[r]-(m)"
-
-  const typeFilter = relType ? " AND type(r) = $relType" : ""
-  const params: QueryParams = { nodeId, limit: neo4j.int(limit) }
-
-  if (relType) {
-    params.relType = relType
-  }
-
   return runReadQuery(
     connection,
-    `MATCH ${pattern} WHERE elementId(n) = $nodeId${typeFilter} RETURN n, r, m LIMIT $limit`,
-    params
+    getLegacyExpansionQuery(direction, relType),
+    getLegacyExpansionParams(nodeId, limit, relType)
   )
 }
 
-export async function getNodeRelationshipSummary(
+export async function expandGraphNodes(
+  connection: AdminConnection,
+  nodeIds: string[],
+  direction: "incoming" | "outgoing" | "both",
+  limit = 80,
+  relType?: string
+) {
+  return runReadQuery(
+    connection,
+    getBatchExpansionQuery(direction, relType),
+    getExpansionParams(nodeIds, limit, relType)
+  )
+}
+
+export async function getNodeAdjacency(
   connection: AdminConnection,
   nodeId: string
+) {
+  return runReadQuery(
+    connection,
+    `MATCH (n)
+WHERE elementId(n) = $nodeId
+OPTIONAL MATCH (n)-[r]-(m)
+RETURN n, r, m`,
+    { nodeId }
+  )
+}
+
+export async function getNodesRelationshipSummary(
+  connection: AdminConnection,
+  nodeIds: string[]
 ): Promise<NodeRelationshipSummary> {
+  const uniqueNodeIds = Array.from(new Set(nodeIds))
   const result = await runReadQuery(
     connection,
-    `MATCH (n)-[r]-(m)
-WHERE elementId(n) = $nodeId
-WITH type(r) AS relType,
+    `UNWIND $nodeIds AS nodeId
+MATCH (n)
+WHERE elementId(n) = nodeId
+MATCH (n)-[r]-(m)
+WITH nodeId,
+     type(r) AS relType,
      CASE WHEN startNode(r) = n THEN 'outgoing' ELSE 'incoming' END AS direction,
-     m
-RETURN relType, direction, count(DISTINCT m) AS nodeCount
+     count(DISTINCT m) AS nodeCount
+RETURN relType, direction, sum(nodeCount) AS nodeCount
 ORDER BY relType, direction`,
-    { nodeId }
+    { nodeIds: uniqueNodeIds }
   )
 
   const entries = result.rows.map((row) => ({

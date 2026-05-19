@@ -2,14 +2,13 @@ import { z } from "zod"
 
 import { getRouteAccess, unauthorizedResponse } from "@/lib/auth-guard"
 import { getAdminConnection } from "@/lib/connection-registry"
-import type { NodeRelationshipSummary } from "@/lib/graph-types"
-import { getNodesRelationshipSummary } from "@/lib/neo4j"
+import { getNodeAdjacency } from "@/lib/neo4j"
 
 export const runtime = "nodejs"
 
 const requestSchema = z.object({
   connectionId: z.string().min(1),
-  nodeIds: z.array(z.string().min(1)).min(1),
+  nodeId: z.string().min(1),
 })
 
 export async function POST(request: Request) {
@@ -23,12 +22,10 @@ export async function POST(request: Request) {
 
   if (!body.success) {
     return Response.json(
-      { error: "Invalid relationship-summary request" },
+      { error: "Invalid adjacency request" },
       { status: 400 }
     )
   }
-
-  const nodeIds = Array.from(new Set(body.data.nodeIds))
 
   const connection = getAdminConnection(body.data.connectionId)
 
@@ -37,13 +34,10 @@ export async function POST(request: Request) {
   }
 
   try {
-    const summary = await getNodesRelationshipSummary(connection, nodeIds)
+    const result = await getNodeAdjacency(connection, body.data.nodeId)
 
-    return Response.json(summary)
+    return Response.json(result.graph)
   } catch {
-    return Response.json({
-      total: 0,
-      entries: [],
-    } satisfies NodeRelationshipSummary)
+    return Response.json({ error: "Adjacency request failed" }, { status: 500 })
   }
 }

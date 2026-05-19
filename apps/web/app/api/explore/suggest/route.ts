@@ -3,7 +3,6 @@ import { z } from "zod"
 import { getRouteAccess, unauthorizedResponse } from "@/lib/auth-guard"
 import { getAdminConnection } from "@/lib/connection-registry"
 import { suggestGraph } from "@/lib/neo4j"
-import { suggestSampleGraph } from "@/lib/sample-graph"
 
 export const runtime = "nodejs"
 
@@ -27,10 +26,6 @@ export async function POST(request: Request) {
       { error: "Invalid graph suggestion request" },
       { status: 400 }
     )
-  }
-
-  if (body.data.connectionId === "sample") {
-    return Response.json(suggestSampleGraph(body.data.search, body.data.limit))
   }
 
   const connection = getAdminConnection(body.data.connectionId)
