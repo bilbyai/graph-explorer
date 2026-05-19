@@ -8,6 +8,7 @@ import neo4j, {
 
 import type { AdminConnection } from "@/lib/connection-registry"
 import type {
+  ExploreGraphExclusions,
   GraphNodeRecord,
   GraphPayload,
   GraphRelationshipRecord,
@@ -20,6 +21,13 @@ import { resolveNodeCaption } from "@/lib/node-captions"
 import { getDefaultLabelColor as getCategoryColor } from "@/lib/node-styling"
 
 type QueryParams = Record<string, unknown>
+
+const emptyExploreExclusions: ExploreGraphExclusions = {
+  labels: [],
+  relationshipTypes: [],
+  nodeIds: [],
+  relationshipIds: [],
+}
 
 type GraphAccumulator = {
   graph: GraphPayload
@@ -225,16 +233,62 @@ function getExpansionPattern(direction: "incoming" | "outgoing" | "both") {
       : "(n)-[r]-(m)"
 }
 
+function getExploreExclusions(exclusions?: ExploreGraphExclusions) {
+  return exclusions ?? emptyExploreExclusions
+}
+
+function getNodeExclusionPredicates(alias: string) {
+  return [
+    `NOT elementId(${alias}) IN $excludedNodeIds`,
+    `none(label IN labels(${alias}) WHERE label IN $excludedLabels)`,
+  ]
+}
+
+function getRelationshipExclusionPredicates(alias: string) {
+  return [
+    `NOT elementId(${alias}) IN $excludedRelationshipIds`,
+    `NOT type(${alias}) IN $excludedRelationshipTypes`,
+  ]
+}
+
+function getWhereClause(predicates: string[]) {
+  return predicates.length > 0 ? `WHERE ${predicates.join(" AND ")}` : ""
+}
+
+function getExploreParams(exclusions?: ExploreGraphExclusions): QueryParams {
+  const current = getExploreExclusions(exclusions)
+
+  return {
+    excludedLabels: current.labels,
+    excludedRelationshipTypes: current.relationshipTypes,
+    excludedNodeIds: current.nodeIds,
+    excludedRelationshipIds: current.relationshipIds,
+  }
+}
+
+function getExpansionTypePredicates(relType?: string) {
+  return relType ? ["type(r) = $relType"] : []
+}
+
 function getExpansionTypeFilter(relType?: string) {
-  return relType ? "WHERE type(r) = $relType" : ""
+  return getWhereClause([
+    ...getExpansionTypePredicates(relType),
+    ...getRelationshipExclusionPredicates("r"),
+    ...getNodeExclusionPredicates("m"),
+  ])
 }
 
 function getExpansionParams(
   nodeIds: string[],
   limit: number,
-  relType?: string
+  relType?: string,
+  exclusions?: ExploreGraphExclusions
 ) {
-  const params: QueryParams = { nodeIds, limit: neo4j.int(limit) }
+  const params: QueryParams = {
+    ...getExploreParams(exclusions),
+    nodeIds,
+    limit: neo4j.int(limit),
+  }
 
   if (relType) {
     params.relType = relType
@@ -246,9 +300,14 @@ function getExpansionParams(
 function getLegacyExpansionParams(
   nodeId: string,
   limit: number,
-  relType?: string
+  relType?: string,
+  exclusions?: ExploreGraphExclusions
 ) {
-  const params: QueryParams = { nodeId, limit: neo4j.int(limit) }
+  const params: QueryParams = {
+    ...getExploreParams(exclusions),
+    nodeId,
+    limit: neo4j.int(limit),
+  }
 
   if (relType) {
     params.relType = relType
@@ -257,15 +316,20 @@ function getLegacyExpansionParams(
   return params
 }
 
-function getLegacyExpansionTypeFilter(relType?: string) {
-  return relType ? " AND type(r) = $relType" : ""
+function getLegacyExpansionFilter(relType?: string) {
+  return [
+    ...getNodeExclusionPredicates("n"),
+    ...getExpansionTypePredicates(relType),
+    ...getRelationshipExclusionPredicates("r"),
+    ...getNodeExclusionPredicates("m"),
+  ].join(" AND ")
 }
 
 function getLegacyExpansionQuery(
   direction: "incoming" | "outgoing" | "both",
   relType?: string
 ) {
-  return `MATCH ${getExpansionPattern(direction)} WHERE elementId(n) = $nodeId${getLegacyExpansionTypeFilter(relType)} RETURN n, r, m LIMIT $limit`
+  return `MATCH ${getExpansionPattern(direction)} WHERE elementId(n) = $nodeId AND ${getLegacyExpansionFilter(relType)} RETURN n, r, m LIMIT $limit`
 }
 
 function getBatchExpansionQuery(
@@ -274,7 +338,7 @@ function getBatchExpansionQuery(
 ) {
   return `UNWIND $nodeIds AS nodeId
 MATCH (n)
-WHERE elementId(n) = nodeId
+WHERE elementId(n) = nodeId AND ${getNodeExclusionPredicates("n").join(" AND ")}
 CALL {
   WITH n
   MATCH ${getExpansionPattern(direction)}
@@ -364,21 +428,30 @@ export async function readSchema(
 export async function searchGraph(
   connection: AdminConnection,
   search: string,
-  limit = 80
+  limit = 80,
+  exclusions?: ExploreGraphExclusions
 ) {
   const trimmedSearch = search.trim().toLowerCase()
   const terms = getSearchTerms(trimmedSearch)
 
   if (!trimmedSearch) {
-    return runReadQuery(connection, "MATCH (n) RETURN n LIMIT $limit", {
-      limit: neo4j.int(limit),
-    })
+    return runReadQuery(
+      connection,
+      `MATCH (n)
+${getWhereClause(getNodeExclusionPredicates("n"))}
+RETURN n LIMIT $limit`,
+      {
+        ...getExploreParams(exclusions),
+        limit: neo4j.int(limit),
+      }
+    )
   }
 
   const fullTextResult = await searchFullTextNodeIndexes(
     connection,
     trimmedSearch,
-    limit
+    limit,
+    exclusions
   )
 
   if (fullTextResult?.graph.nodes.length) {
@@ -389,7 +462,8 @@ export async function searchGraph(
     connection,
     trimmedSearch,
     terms,
-    limit
+    limit,
+    exclusions
   )
 
   return propertyResult ?? emptyQueryResult()
@@ -399,7 +473,8 @@ async function searchPropertyValues(
   connection: AdminConnection,
   search: string,
   terms: string[],
-  limit: number
+  limit: number,
+  exclusions?: ExploreGraphExclusions
 ) {
   try {
     return await runReadQuery(
@@ -448,10 +523,12 @@ CALL {
     END AS matchRank
 }
 WITH n, max(matchRank) AS matchRank
+WHERE ${getNodeExclusionPredicates("n").join(" AND ")}
 RETURN n
 ORDER BY matchRank DESC
 LIMIT $limit`,
       {
+        ...getExploreParams(exclusions),
         search,
         terms,
         collapsedSearch: collapseSearchValue(search),
@@ -466,7 +543,8 @@ LIMIT $limit`,
 async function searchFullTextNodeIndexes(
   connection: AdminConnection,
   search: string,
-  limit: number
+  limit: number,
+  exclusions?: ExploreGraphExclusions
 ) {
   try {
     const indexes = await runReadQuery(
@@ -499,10 +577,13 @@ WITH collect({ node: node, score: score }) AS matches, max(score) AS maxScore
 UNWIND matches AS match
 WITH match.node AS node, match.score AS score, maxScore
 WHERE NOT $useScoreCutoff OR score >= maxScore * $scoreCutoff
+WITH node, score
+WHERE ${getNodeExclusionPredicates("node").join(" AND ")}
 RETURN node
 ORDER BY score DESC
 LIMIT $limit`,
       {
+        ...getExploreParams(exclusions),
         indexNames,
         query: createFullTextSearchQuery(search),
         candidateLimit: neo4j.int(candidateLimit),
@@ -548,13 +629,14 @@ function emptyQueryResult(): QueryResultPayload {
 export async function suggestGraph(
   connection: AdminConnection,
   search: string,
-  limit = 8
+  limit = 8,
+  exclusions?: ExploreGraphExclusions
 ): Promise<GraphSearchSuggestion[]> {
   if (!search.trim()) {
     return []
   }
 
-  const result = await searchGraph(connection, search, limit)
+  const result = await searchGraph(connection, search, limit, exclusions)
 
   return result.graph.nodes.map((node) => {
     const labels = node.labels.map((label) => String(label))
@@ -574,12 +656,13 @@ export async function expandGraph(
   nodeId: string,
   direction: "incoming" | "outgoing" | "both",
   limit = 80,
-  relType?: string
+  relType?: string,
+  exclusions?: ExploreGraphExclusions
 ) {
   return runReadQuery(
     connection,
     getLegacyExpansionQuery(direction, relType),
-    getLegacyExpansionParams(nodeId, limit, relType)
+    getLegacyExpansionParams(nodeId, limit, relType, exclusions)
   )
 }
 
@@ -588,12 +671,13 @@ export async function expandGraphNodes(
   nodeIds: string[],
   direction: "incoming" | "outgoing" | "both",
   limit = 80,
-  relType?: string
+  relType?: string,
+  exclusions?: ExploreGraphExclusions
 ) {
   return runReadQuery(
     connection,
     getBatchExpansionQuery(direction, relType),
-    getExpansionParams(nodeIds, limit, relType)
+    getExpansionParams(nodeIds, limit, relType, exclusions)
   )
 }
 
@@ -613,22 +697,27 @@ RETURN n, r, m`,
 
 export async function getNodesRelationshipSummary(
   connection: AdminConnection,
-  nodeIds: string[]
+  nodeIds: string[],
+  exclusions?: ExploreGraphExclusions
 ): Promise<NodeRelationshipSummary> {
   const uniqueNodeIds = Array.from(new Set(nodeIds))
   const result = await runReadQuery(
     connection,
     `UNWIND $nodeIds AS nodeId
 MATCH (n)
-WHERE elementId(n) = nodeId
+WHERE elementId(n) = nodeId AND ${getNodeExclusionPredicates("n").join(" AND ")}
 MATCH (n)-[r]-(m)
+WHERE ${[
+      ...getRelationshipExclusionPredicates("r"),
+      ...getNodeExclusionPredicates("m"),
+    ].join(" AND ")}
 WITH nodeId,
      type(r) AS relType,
      CASE WHEN startNode(r) = n THEN 'outgoing' ELSE 'incoming' END AS direction,
      count(DISTINCT m) AS nodeCount
 RETURN relType, direction, sum(nodeCount) AS nodeCount
 ORDER BY relType, direction`,
-    { nodeIds: uniqueNodeIds }
+    { ...getExploreParams(exclusions), nodeIds: uniqueNodeIds }
   )
 
   const entries = result.rows.map((row) => ({

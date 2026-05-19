@@ -10,6 +10,14 @@ export const runtime = "nodejs"
 const requestSchema = z.object({
   connectionId: z.string().min(1),
   nodeIds: z.array(z.string().min(1)).min(1),
+  exclusions: z
+    .object({
+      labels: z.array(z.string()).max(200).default([]),
+      relationshipTypes: z.array(z.string()).max(200).default([]),
+      nodeIds: z.array(z.string()).max(2000).default([]),
+      relationshipIds: z.array(z.string()).max(2000).default([]),
+    })
+    .optional(),
 })
 
 export async function POST(request: Request) {
@@ -37,7 +45,11 @@ export async function POST(request: Request) {
   }
 
   try {
-    const summary = await getNodesRelationshipSummary(connection, nodeIds)
+    const summary = await getNodesRelationshipSummary(
+      connection,
+      nodeIds,
+      body.data.exclusions
+    )
 
     return Response.json(summary)
   } catch {

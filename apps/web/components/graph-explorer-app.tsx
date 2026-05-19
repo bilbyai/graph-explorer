@@ -102,6 +102,7 @@ import {
 } from "@/lib/browser-neo4j"
 import { validateReadOnlyMatchQuery } from "@/lib/cypher"
 import type {
+  ExploreGraphExclusions,
   GraphNodeRecord,
   GraphPayload,
   GraphRelationshipRecord,
@@ -249,6 +250,9 @@ export function GraphExplorerApp({
   } | null>(null)
   const [canvasVersion, setCanvasVersion] = React.useState(0)
   const [hiddenCategories, setHiddenCategories] = React.useState<string[]>([])
+  const [hiddenRelationshipTypes, setHiddenRelationshipTypes] = React.useState<
+    string[]
+  >([])
   const [hiddenIds, setHiddenIds] = React.useState<string[]>([])
   const [status, setStatus] = React.useState("Ready")
   const [statusDetails, setStatusDetails] =
@@ -262,6 +266,30 @@ export function GraphExplorerApp({
   const [queryError, setQueryError] = React.useState<string | null>(null)
   const [history, setHistory] = React.useState<QueryHistoryEntry[]>([])
   const [styling, setStyling] = React.useState<StylingState>(emptyStyling)
+  const exploreExclusions = React.useMemo(
+    () =>
+      getExploreGraphExclusions(
+        graph,
+        hiddenCategories,
+        hiddenRelationshipTypes,
+        hiddenIds
+      ),
+    [graph, hiddenCategories, hiddenRelationshipTypes, hiddenIds]
+  )
+  const exploreExclusionsRef = React.useRef(exploreExclusions)
+
+  React.useEffect(() => {
+    exploreExclusionsRef.current = exploreExclusions
+  }, [exploreExclusions])
+
+  React.useEffect(() => {
+    setSelection((currentSelection) => {
+      if (!currentSelection) return currentSelection
+      return isSelectionHidden(currentSelection, graph, exploreExclusions)
+        ? null
+        : currentSelection
+    })
+  }, [exploreExclusions, graph])
 
   const clearScene = React.useCallback(() => {
     setGraph(emptyGraph)
@@ -270,6 +298,7 @@ export function GraphExplorerApp({
     setSearchSuggestions([])
     setSearchResultCount(null)
     setHiddenCategories([])
+    setHiddenRelationshipTypes([])
     setHiddenIds([])
     setFocusRequest(null)
     setStatusDetails(null)
@@ -410,6 +439,7 @@ export function GraphExplorerApp({
       setStatusDetails(null)
       if (!connection) {
         setGraph(emptyGraph)
+        setHiddenRelationshipTypes([])
         setHiddenIds([])
         setSearchResultCount(null)
         setIsGraphLoading(false)
@@ -419,7 +449,6 @@ export function GraphExplorerApp({
 
       if (!trimmedSearch) {
         setGraph(emptyGraph)
-        setHiddenIds([])
       }
       setSearchResultCount(null)
       setIsGraphLoading(true)
@@ -429,7 +458,12 @@ export function GraphExplorerApp({
           setStatus("Searching local graph from this browser")
 
           try {
-            const result = await searchLocalGraph(connection, search, 120)
+            const result = await searchLocalGraph(
+              connection,
+              search,
+              120,
+              exploreExclusionsRef.current
+            )
             applyGraphSearchResult(result.graph, search, "Local graph loaded")
           } catch (error) {
             if (!trimmedSearch) {
@@ -470,6 +504,7 @@ export function GraphExplorerApp({
               connectionId: connection.id,
               search,
               limit: 120,
+              exclusions: exploreExclusionsRef.current,
             }),
           })
 
@@ -567,7 +602,12 @@ export function GraphExplorerApp({
       setIsSearchSuggesting(true)
 
       if (selectedConnection.source === "local") {
-        suggestLocalGraph(selectedConnection, trimmedSearch)
+        suggestLocalGraph(
+          selectedConnection,
+          trimmedSearch,
+          8,
+          exploreExclusions
+        )
           .then((suggestions) => {
             if (!cancelled) {
               setSearchSuggestions(suggestions)
@@ -595,6 +635,7 @@ export function GraphExplorerApp({
           connectionId: selectedConnection.id,
           search: trimmedSearch,
           limit: 8,
+          exclusions: exploreExclusions,
         }),
         signal: controller.signal,
       })
@@ -625,7 +666,7 @@ export function GraphExplorerApp({
       controller.abort()
       window.clearTimeout(timeout)
     }
-  }, [searchTerm, selectedConnection])
+  }, [exploreExclusions, searchTerm, selectedConnection])
 
   const schemaSearchSuggestions = React.useMemo<GraphSearchSuggestion[]>(() => {
     const trimmedSearch = searchTerm.trim().toLowerCase()
@@ -635,7 +676,11 @@ export function GraphExplorerApp({
     }
 
     return schema.labels
-      .filter((label) => label.name.toLowerCase().includes(trimmedSearch))
+      .filter(
+        (label) =>
+          !exploreExclusions.labels.includes(label.name) &&
+          label.name.toLowerCase().includes(trimmedSearch)
+      )
       .map((label) => ({
         id: `label:${label.name}`,
         caption: label.name,
@@ -643,7 +688,7 @@ export function GraphExplorerApp({
         detail: `Label - ${label.count} nodes`,
         searchValue: label.name,
       }))
-  }, [schema.labels, searchTerm])
+  }, [exploreExclusions.labels, schema.labels, searchTerm])
 
   const visibleSearchSuggestions = React.useMemo(() => {
     const seenSearchValues = new Set<string>()
@@ -651,6 +696,15 @@ export function GraphExplorerApp({
     return [...schemaSearchSuggestions, ...searchSuggestions].filter(
       (suggestion) => {
         const key = suggestion.searchValue.toLowerCase()
+
+        if (
+          exploreExclusions.nodeIds.includes(suggestion.id) ||
+          suggestion.labels.some((label) =>
+            exploreExclusions.labels.includes(label)
+          )
+        ) {
+          return false
+        }
 
         if (seenSearchValues.has(key)) {
           return false
@@ -660,7 +714,7 @@ export function GraphExplorerApp({
         return true
       }
     )
-  }, [schemaSearchSuggestions, searchSuggestions])
+  }, [exploreExclusions, schemaSearchSuggestions, searchSuggestions])
 
   React.useEffect(() => {
     if (!preferencesRestored) {
@@ -669,6 +723,8 @@ export function GraphExplorerApp({
 
     setSelection(null)
     setHiddenCategories([])
+    setHiddenRelationshipTypes([])
+    setHiddenIds([])
     void loadSchema(selectedConnection)
     void loadGraph(selectedConnection, "")
   }, [loadGraph, loadSchema, preferencesRestored, selectedConnection])
@@ -711,7 +767,8 @@ export function GraphExplorerApp({
               batch,
               direction,
               120,
-              relType
+              relType,
+              exploreExclusions
             )
             expandedGraph = mergeGraphs(expandedGraph, result.graph)
           }
@@ -750,6 +807,7 @@ export function GraphExplorerApp({
               direction,
               limit: 120,
               relType,
+              exclusions: exploreExclusions,
             }),
           })
 
@@ -790,7 +848,11 @@ export function GraphExplorerApp({
     }
 
     if (selectedConnection.source === "local") {
-      return getLocalNodesRelationshipSummary(selectedConnection, nodeIds)
+      return getLocalNodesRelationshipSummary(
+        selectedConnection,
+        nodeIds,
+        exploreExclusions
+      )
     }
 
     const response = await fetch("/api/explore/relationship-summary", {
@@ -799,6 +861,7 @@ export function GraphExplorerApp({
       body: JSON.stringify({
         connectionId: selectedConnection.id,
         nodeIds,
+        exclusions: exploreExclusions,
       }),
     })
 
@@ -916,6 +979,14 @@ export function GraphExplorerApp({
     )
   }
 
+  function toggleRelationshipType(type: string) {
+    setHiddenRelationshipTypes((currentTypes) =>
+      currentTypes.includes(type)
+        ? currentTypes.filter((item) => item !== type)
+        : [...currentTypes, type]
+    )
+  }
+
   function hideIds(ids: string[]) {
     const idSet = new Set(ids)
     if (idSet.size === 0) return
@@ -948,10 +1019,16 @@ export function GraphExplorerApp({
     const revealedIds = getGraphSelectionIds(request.selection)
     const nodeIds = request.graph.nodes.map((node) => node.id)
     const labels = new Set(request.graph.nodes.flatMap((node) => node.labels))
+    const relationshipTypes = new Set(
+      request.graph.relationships.map((relationship) => relationship.type)
+    )
 
     setGraph((currentGraph) => mergeGraphs(currentGraph, request.graph))
     setHiddenCategories((currentCategories) =>
       currentCategories.filter((category) => !labels.has(category))
+    )
+    setHiddenRelationshipTypes((currentTypes) =>
+      currentTypes.filter((type) => !relationshipTypes.has(type))
     )
     setHiddenIds((currentIds) =>
       currentIds.filter(
@@ -1005,9 +1082,11 @@ export function GraphExplorerApp({
             schema={schema}
             graph={graph}
             hiddenCategories={hiddenCategories}
+            hiddenRelationshipTypes={hiddenRelationshipTypes}
             styling={styling}
             onStylingChange={setStyling}
             onToggleCategory={toggleCategory}
+            onToggleRelationshipType={toggleRelationshipType}
             searchSuggestions={visibleSearchSuggestions}
             isSearchSuggesting={isSearchSuggesting}
             hasConnection={selectedConnection !== null}
@@ -1028,6 +1107,7 @@ export function GraphExplorerApp({
                 canvasKey={canvasVersion}
                 focusRequest={focusRequest}
                 hiddenCategories={hiddenCategories}
+                hiddenRelationshipTypes={hiddenRelationshipTypes}
                 hiddenIds={hiddenIds}
                 styling={styling}
                 selected={selection}
@@ -1293,10 +1373,12 @@ function ExploreLeftPanel({
   schema,
   graph,
   hiddenCategories,
+  hiddenRelationshipTypes,
   styling,
   onStylingChange,
   onSearchTermChange,
   onToggleCategory,
+  onToggleRelationshipType,
   searchSuggestions,
   isSearchSuggesting,
   hasConnection,
@@ -1312,10 +1394,12 @@ function ExploreLeftPanel({
   schema: SchemaPayload
   graph: GraphPayload
   hiddenCategories: string[]
+  hiddenRelationshipTypes: string[]
   styling: StylingState
   onStylingChange: (next: StylingState) => void
   onSearchTermChange: (value: string) => void
   onToggleCategory: (category: string) => void
+  onToggleRelationshipType: (type: string) => void
   searchSuggestions: GraphSearchSuggestion[]
   isSearchSuggesting: boolean
   hasConnection: boolean
@@ -1756,8 +1840,10 @@ function ExploreLeftPanel({
           <RelationshipsList
             schema={schema}
             graph={graph}
+            hiddenRelationshipTypes={hiddenRelationshipTypes}
             styling={styling}
             onStylingChange={onStylingChange}
+            onToggleRelationshipType={onToggleRelationshipType}
           />
         )}
 
@@ -1781,13 +1867,17 @@ function ExploreLeftPanel({
 function RelationshipsList({
   schema,
   graph,
+  hiddenRelationshipTypes,
   styling,
   onStylingChange,
+  onToggleRelationshipType,
 }: {
   schema: SchemaPayload
   graph: GraphPayload
+  hiddenRelationshipTypes: string[]
   styling: StylingState
   onStylingChange: (next: StylingState) => void
+  onToggleRelationshipType: (type: string) => void
 }) {
   const [filter, setFilter] = React.useState("")
   const [scope, setScope] = React.useState<"all" | "in-scene" | "off-scene">(
@@ -1914,6 +2004,7 @@ function RelationshipsList({
             const styled = styling.relationshipStyles[type.name]
             const color = styled?.color ?? DEFAULT_RELATIONSHIP_COLOR
             const expanded = openType === type.name
+            const hidden = hiddenRelationshipTypes.includes(type.name)
             const sceneCount = inSceneCounts[type.name] ?? 0
             const showCount =
               scope === "in-scene"
@@ -1931,7 +2022,7 @@ function RelationshipsList({
                   open={expanded}
                   onOpenChange={(open) => setOpenType(open ? type.name : null)}
                 >
-                  <div className="flex items-center gap-2 pr-3">
+                  <div className="flex items-center gap-2 pr-2">
                     <PopoverTrigger asChild>
                       <button
                         aria-label={`Edit styling for ${type.name}`}
@@ -1954,6 +2045,21 @@ function RelationshipsList({
                         </span>
                       ) : null}
                     </div>
+                    <Button
+                      aria-label={
+                        hidden ? `Show ${type.name}` : `Hide ${type.name}`
+                      }
+                      className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+                      onClick={() => onToggleRelationshipType(type.name)}
+                      type="button"
+                      variant="ghost"
+                    >
+                      {hidden ? (
+                        <EyeOff className="size-3.5" />
+                      ) : (
+                        <Eye className="size-3.5 text-primary" />
+                      )}
+                    </Button>
                   </div>
                   <PopoverContent
                     side="right"
@@ -3158,6 +3264,84 @@ function getNodeIdsFromIds(ids: string[], graph: GraphPayload) {
     seen.add(id)
     return true
   })
+}
+
+function getExploreGraphExclusions(
+  graph: GraphPayload,
+  labels: string[],
+  relationshipTypes: string[],
+  hiddenIds: string[]
+): ExploreGraphExclusions {
+  const graphNodeIds = new Set(graph.nodes.map((node) => node.id))
+  const graphRelationshipIds = new Set(
+    graph.relationships.map((relationship) => relationship.id)
+  )
+  const nodeIds: string[] = []
+  const relationshipIds: string[] = []
+
+  for (const id of hiddenIds) {
+    const isNode = graphNodeIds.has(id)
+    const isRelationship = graphRelationshipIds.has(id)
+
+    if (isNode || !isRelationship) {
+      nodeIds.push(id)
+    }
+    if (isRelationship || !isNode) {
+      relationshipIds.push(id)
+    }
+  }
+
+  return {
+    labels,
+    relationshipTypes,
+    nodeIds,
+    relationshipIds,
+  }
+}
+
+function isSelectionHidden(
+  selection: NonNullable<GraphSelection>,
+  graph: GraphPayload,
+  exclusions: ExploreGraphExclusions
+) {
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node] as const))
+  const relationshipById = new Map(
+    graph.relationships.map((relationship) => [relationship.id, relationship])
+  )
+
+  return getGraphSelectionIds(selection).some((id) => {
+    const node = nodeById.get(id)
+    if (node) {
+      return isNodeExcluded(node, exclusions)
+    }
+
+    const relationship = relationshipById.get(id)
+    if (relationship) {
+      return isRelationshipExcluded(relationship, exclusions)
+    }
+
+    return false
+  })
+}
+
+function isNodeExcluded(
+  node: GraphNodeRecord,
+  exclusions: ExploreGraphExclusions
+) {
+  return (
+    exclusions.nodeIds.includes(node.id) ||
+    node.labels.some((label) => exclusions.labels.includes(label))
+  )
+}
+
+function isRelationshipExcluded(
+  relationship: GraphRelationshipRecord,
+  exclusions: ExploreGraphExclusions
+) {
+  return (
+    exclusions.relationshipIds.includes(relationship.id) ||
+    exclusions.relationshipTypes.includes(relationship.type)
+  )
 }
 
 function chunkArray<T>(items: T[], size: number) {

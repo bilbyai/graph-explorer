@@ -122,6 +122,7 @@ type ReagraphWorkspaceProps = {
     version: number
   } | null
   hiddenCategories: string[]
+  hiddenRelationshipTypes?: string[]
   hiddenIds?: string[]
   styling?: StylingState
   selected: GraphSelection
@@ -155,6 +156,7 @@ export function ReagraphWorkspace({
   canvasKey,
   focusRequest,
   hiddenCategories,
+  hiddenRelationshipTypes = EMPTY_SELECTIONS,
   hiddenIds,
   styling = emptyStyling,
   selected,
@@ -206,9 +208,10 @@ export function ReagraphWorkspace({
         (relationship) =>
           visibleNodeIds.has(relationship.source) &&
           visibleNodeIds.has(relationship.target) &&
+          !hiddenRelationshipTypes.includes(relationship.type) &&
           !hiddenIdSet.has(relationship.id)
       ),
-    [graph.relationships, visibleNodeIds, hiddenIdSet]
+    [graph.relationships, visibleNodeIds, hiddenRelationshipTypes, hiddenIdSet]
   )
   const singleNodeIds = React.useMemo(() => {
     const connectedNodeIds = new Set<string>()
@@ -326,6 +329,15 @@ export function ReagraphWorkspace({
   )
   const relationshipSummaryFetcherRef = React.useRef(onFetchRelationshipSummary)
   const relationshipSummaryGraphRef = React.useRef(graph)
+  const relationshipSummaryVisibilityKey = React.useMemo(
+    () =>
+      JSON.stringify({
+        hiddenCategories,
+        hiddenRelationshipTypes,
+        hiddenIds: hiddenIds ?? EMPTY_SELECTIONS,
+      }),
+    [hiddenCategories, hiddenRelationshipTypes, hiddenIds]
+  )
   const [hoveredNode, setHoveredNode] = React.useState<GraphNodeRecord | null>(
     null
   )
@@ -850,7 +862,11 @@ export function ReagraphWorkspace({
       }
 
       const uniqueNodeIds = Array.from(new Set(nodeIds))
-      const cacheKey = [...uniqueNodeIds].sort().join("\0")
+      const cacheKey = `${relationshipSummaryVisibilityKey}\0${[
+        ...uniqueNodeIds,
+      ]
+        .sort()
+        .join("\0")}`
       const cached = relationshipSummaryCacheRef.current.get(cacheKey)
       if (cached) return cached
 
@@ -861,7 +877,7 @@ export function ReagraphWorkspace({
       relationshipSummaryCacheRef.current.set(cacheKey, request)
       return request
     },
-    []
+    [relationshipSummaryVisibilityKey]
   )
 
   const handleContextMenu = React.useCallback(
@@ -975,6 +991,7 @@ export function ReagraphWorkspace({
           <StaticGraphFallback
             graph={graph}
             hiddenCategories={hiddenCategories}
+            hiddenRelationshipTypes={hiddenRelationshipTypes}
             hiddenIds={hiddenIds}
             styling={styling}
             selected={selected}
@@ -2158,6 +2175,7 @@ class GraphCanvasErrorBoundary extends React.Component<
 function StaticGraphFallback({
   graph,
   hiddenCategories,
+  hiddenRelationshipTypes = EMPTY_SELECTIONS,
   hiddenIds = EMPTY_SELECTIONS,
   styling = emptyStyling,
   selected,
@@ -2180,7 +2198,10 @@ function StaticGraphFallback({
       <svg className="h-full w-full" role="img" viewBox="0 0 100 100">
         <title>Static graph fallback</title>
         {graph.relationships.map((relationship) => {
-          if (hiddenIdSet.has(relationship.id)) {
+          if (
+            hiddenRelationshipTypes.includes(relationship.type) ||
+            hiddenIdSet.has(relationship.id)
+          ) {
             return null
           }
 

@@ -10,6 +10,14 @@ const requestSchema = z.object({
   connectionId: z.string().min(1),
   search: z.string().default(""),
   limit: z.number().int().min(1).max(20).default(8),
+  exclusions: z
+    .object({
+      labels: z.array(z.string()).max(200).default([]),
+      relationshipTypes: z.array(z.string()).max(200).default([]),
+      nodeIds: z.array(z.string()).max(2000).default([]),
+      relationshipIds: z.array(z.string()).max(2000).default([]),
+    })
+    .optional(),
 })
 
 export async function POST(request: Request) {
@@ -36,7 +44,12 @@ export async function POST(request: Request) {
 
   try {
     return Response.json(
-      await suggestGraph(connection, body.data.search, body.data.limit)
+      await suggestGraph(
+        connection,
+        body.data.search,
+        body.data.limit,
+        body.data.exclusions
+      )
     )
   } catch {
     return Response.json([])

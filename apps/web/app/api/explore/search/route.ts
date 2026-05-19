@@ -10,6 +10,14 @@ const requestSchema = z.object({
   connectionId: z.string().min(1),
   search: z.string().default(""),
   limit: z.number().int().min(1).max(300).default(80),
+  exclusions: z
+    .object({
+      labels: z.array(z.string()).max(200).default([]),
+      relationshipTypes: z.array(z.string()).max(200).default([]),
+      nodeIds: z.array(z.string()).max(2000).default([]),
+      relationshipIds: z.array(z.string()).max(2000).default([]),
+    })
+    .optional(),
 })
 
 function getErrorDetails(error: unknown) {
@@ -67,7 +75,8 @@ export async function POST(request: Request) {
     const result = await searchGraph(
       connection,
       body.data.search,
-      body.data.limit
+      body.data.limit,
+      body.data.exclusions
     )
 
     return Response.json(result.graph)

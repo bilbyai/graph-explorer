@@ -20,6 +20,13 @@ export type GraphPayload = {
   relationships: GraphRelationshipRecord[]
 }
 
+export type ExploreGraphExclusions = {
+  labels: string[]
+  relationshipTypes: string[]
+  nodeIds: string[]
+  relationshipIds: string[]
+}
+
 export type GraphSearchSuggestion = {
   id: string
   caption: string

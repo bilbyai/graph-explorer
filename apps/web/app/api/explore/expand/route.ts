@@ -13,6 +13,14 @@ const requestSchema = z.object({
   direction: z.enum(["incoming", "outgoing", "both"]).default("both"),
   limit: z.number().int().min(1).max(300).default(80),
   relType: z.string().min(1).optional(),
+  exclusions: z
+    .object({
+      labels: z.array(z.string()).max(200).default([]),
+      relationshipTypes: z.array(z.string()).max(200).default([]),
+      nodeIds: z.array(z.string()).max(2000).default([]),
+      relationshipIds: z.array(z.string()).max(2000).default([]),
+    })
+    .optional(),
 })
 
 export async function POST(request: Request) {
@@ -48,7 +56,8 @@ export async function POST(request: Request) {
       nodeIds,
       body.data.direction,
       body.data.limit,
-      body.data.relType
+      body.data.relType,
+      body.data.exclusions
     )
 
     return Response.json(result.graph)
