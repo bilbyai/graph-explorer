@@ -186,6 +186,13 @@ export function ReagraphWorkspace({
     x: number
     y: number
   } | null>(null)
+  const sceneMenuTimerRef = React.useRef<number | null>(null)
+  const emptyClickTimerRef = React.useRef<number | null>(null)
+  const emptyClickStartRef = React.useRef<{
+    x: number
+    y: number
+    canClear: boolean
+  } | null>(null)
   const reagraphContextMenuPendingRef = React.useRef(false)
   const visibleNodes = React.useMemo(
     () =>
@@ -614,6 +621,62 @@ export function ReagraphWorkspace({
     setSceneMenuPosition(null)
   }, [onSelect])
 
+  const cancelEmptyClickClear = React.useCallback(() => {
+    if (emptyClickTimerRef.current === null) return
+    window.clearTimeout(emptyClickTimerRef.current)
+    emptyClickTimerRef.current = null
+  }, [])
+
+  const handleWrapperPointerDown = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0) {
+        emptyClickStartRef.current = null
+        return
+      }
+
+      const target = event.target
+      const canClear =
+        target instanceof Element &&
+        !target.closest("[data-graph-menu], button, input, textarea, select, a")
+
+      emptyClickStartRef.current = {
+        x: event.clientX,
+        y: event.clientY,
+        canClear,
+      }
+    },
+    []
+  )
+
+  const handleWrapperPointerUp = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0) return
+
+      const start = emptyClickStartRef.current
+      emptyClickStartRef.current = null
+      if (!start?.canClear) return
+
+      const target = event.target
+      if (!(target instanceof Element)) return
+      if (
+        target.closest("[data-graph-menu], button, input, textarea, select, a")
+      ) {
+        return
+      }
+
+      const moveX = Math.abs(event.clientX - start.x)
+      const moveY = Math.abs(event.clientY - start.y)
+      if (moveX > 4 || moveY > 4) return
+
+      cancelEmptyClickClear()
+      emptyClickTimerRef.current = window.setTimeout(() => {
+        emptyClickTimerRef.current = null
+        handleCanvasClick()
+      }, 0)
+    },
+    [cancelEmptyClickClear, handleCanvasClick]
+  )
+
   const handleWrapperContextMenu = React.useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       event.preventDefault()
@@ -628,14 +691,29 @@ export function ReagraphWorkspace({
         return
       }
 
-      const rect = wrapperRef.current?.getBoundingClientRect()
-      if (!rect) return
+      if (sceneMenuTimerRef.current !== null) {
+        window.clearTimeout(sceneMenuTimerRef.current)
+      }
 
-      setHoveredNode(null)
-      setSceneMenuPosition({
-        x: Math.max(8, Math.min(event.clientX - rect.left, rect.width - 360)),
-        y: Math.max(8, Math.min(event.clientY - rect.top, rect.height - 160)),
-      })
+      const clientX = event.clientX
+      const clientY = event.clientY
+      sceneMenuTimerRef.current = window.setTimeout(() => {
+        sceneMenuTimerRef.current = null
+
+        if (reagraphContextMenuPendingRef.current) {
+          reagraphContextMenuPendingRef.current = false
+          return
+        }
+
+        const rect = wrapperRef.current?.getBoundingClientRect()
+        if (!rect) return
+
+        setHoveredNode(null)
+        setSceneMenuPosition({
+          x: Math.max(8, Math.min(clientX - rect.left, rect.width - 360)),
+          y: Math.max(8, Math.min(clientY - rect.top, rect.height - 160)),
+        })
+      }, 20)
     },
     []
   )
@@ -677,13 +755,15 @@ export function ReagraphWorkspace({
       if (isModifierClick(event)) {
         event?.preventDefault?.()
         event?.stopPropagation?.()
+        cancelEmptyClickClear()
         toggleSelectionId(node.id)
         return
       }
 
+      cancelEmptyClickClear()
       onSelect({ type: "node", id: node.id })
     },
-    [onSelect, toggleSelectionId]
+    [cancelEmptyClickClear, onSelect, toggleSelectionId]
   )
 
   const handleEdgeClick = React.useCallback(
@@ -691,13 +771,15 @@ export function ReagraphWorkspace({
       if (isModifierClick(event)) {
         event?.preventDefault?.()
         event?.stopPropagation?.()
+        cancelEmptyClickClear()
         toggleSelectionId(edge.id)
         return
       }
 
+      cancelEmptyClickClear()
       onSelect({ type: "relationship", id: edge.id })
     },
-    [onSelect, toggleSelectionId]
+    [cancelEmptyClickClear, onSelect, toggleSelectionId]
   )
 
   const handleInspectRelationship = React.useCallback(
@@ -713,10 +795,11 @@ export function ReagraphWorkspace({
     (ids?: string[]) => {
       if (!Array.isArray(ids)) return
 
+      cancelEmptyClickClear()
       onSelect(getSelectionFromVisibleIds(ids))
       setHoveredNode(null)
     },
-    [getSelectionFromVisibleIds, onSelect]
+    [cancelEmptyClickClear, getSelectionFromVisibleIds, onSelect]
   )
 
   const handleNodePointerOver = React.useCallback((node: InternalGraphNode) => {
@@ -754,7 +837,12 @@ export function ReagraphWorkspace({
 
   const handleContextMenu = React.useCallback(
     (event: ContextMenuEvent) => {
+      if (sceneMenuTimerRef.current !== null) {
+        window.clearTimeout(sceneMenuTimerRef.current)
+        sceneMenuTimerRef.current = null
+      }
       reagraphContextMenuPendingRef.current = true
+      setSceneMenuPosition(null)
       window.setTimeout(() => {
         reagraphContextMenuPendingRef.current = false
       }, 0)
@@ -771,20 +859,42 @@ export function ReagraphWorkspace({
         onFetchRelationshipSummary ? fetchCachedRelationshipSummary : undefined,
         onHideId,
         onHideIds,
-        handleInspectRelationship
+        handleInspectRelationship,
+        {
+          singleNodeCount: singleNodeIds.length,
+          canDismissSingleNodes: singleNodeIds.length > 0 && !!onHideIds,
+          canClearScene: !!onClearScene,
+          onClearScene: handleClearScene,
+          onDismissSingleNodes: handleDismissSingleNodes,
+        }
       )
     },
     [
       fetchCachedRelationshipSummary,
+      handleClearScene,
       handleExpandNodes,
+      handleDismissSingleNodes,
       handleInspectRelationship,
       onFetchRelationshipSummary,
       onHideId,
       onHideIds,
+      onClearScene,
       selected,
+      singleNodeIds.length,
       visibleNodeIds,
     ]
   )
+
+  React.useEffect(() => {
+    return () => {
+      if (sceneMenuTimerRef.current !== null) {
+        window.clearTimeout(sceneMenuTimerRef.current)
+      }
+      if (emptyClickTimerRef.current !== null) {
+        window.clearTimeout(emptyClickTimerRef.current)
+      }
+    }
+  }, [])
 
   React.useEffect(() => {
     const wasExpanding = prevExpandingRef.current
@@ -853,6 +963,8 @@ export function ReagraphWorkspace({
       aria-label="Graph workspace"
       className="relative h-full min-h-0 overflow-hidden bg-background"
       onContextMenu={handleWrapperContextMenu}
+      onPointerDown={handleWrapperPointerDown}
+      onPointerUp={handleWrapperPointerUp}
       ref={wrapperRef}
       role="application"
       tabIndex={-1}
@@ -881,6 +993,7 @@ export function ReagraphWorkspace({
           layoutOverrides={layoutOverrides}
           cameraMode={cameraMode}
           selections={selections}
+          actives={selections}
           draggable={adaptiveRendering.draggable}
           animated={adaptiveRendering.animated}
           labelType={adaptiveRendering.labelType}
@@ -1104,45 +1217,36 @@ function FlatNode(props: NodeRendererProps) {
   const caption = typeof node.label === "string" ? node.label : ""
   const truncated = truncateForCircle(caption, size)
   const showText = size >= 10 && truncated.length > 0
-  const circleTexture = React.useMemo(() => createCircleTexture(), [])
-  const selectionTexture = React.useMemo(
-    () => (selected ? createRingTexture() : null),
-    [selected]
-  )
   const texture = React.useMemo(
     () => (showText ? createCaptionTexture(truncated) : null),
     [truncated, showText]
   )
-  React.useEffect(() => () => circleTexture?.dispose(), [circleTexture])
-  React.useEffect(() => () => selectionTexture?.dispose(), [selectionTexture])
   React.useEffect(() => () => texture?.dispose(), [texture])
 
   return (
     <>
-      {selected && selectionTexture && (
-        <sprite position={[0, 0, -0.02]} scale={[size * 2.44, size * 2.44, 1]}>
-          <spriteMaterial
-            map={selectionTexture}
+      {selected && (
+        <mesh position={[0, 0, -0.02]}>
+          <ringGeometry args={[size * 0.98, size * 1.14, 64]} />
+          <meshBasicMaterial
             color={color}
             transparent
             opacity={0.4}
             depthTest={false}
             depthWrite={false}
           />
-        </sprite>
+        </mesh>
       )}
-      {circleTexture && (
-        <sprite userData={{ id, type: "node" }} scale={[size * 2, size * 2, 1]}>
-          <spriteMaterial
-            map={circleTexture}
-            color={color}
-            transparent
-            opacity={opacity}
-            depthTest={false}
-            depthWrite={false}
-          />
-        </sprite>
-      )}
+      <mesh userData={{ id, type: "node" }}>
+        <circleGeometry args={[size, 64]} />
+        <meshBasicMaterial
+          color={color}
+          transparent
+          opacity={opacity}
+          depthTest={false}
+          depthWrite={false}
+        />
+      </mesh>
       {texture && (
         <sprite position={[0, 0, 0.05]} scale={[size * 1.7, size * 1.7, 1]}>
           <spriteMaterial
@@ -1156,37 +1260,6 @@ function FlatNode(props: NodeRendererProps) {
       )}
     </>
   )
-}
-
-function createCircleTexture(): Texture | null {
-  if (typeof document === "undefined") return null
-  const dim = 128
-  const canvas = document.createElement("canvas")
-  canvas.width = dim
-  canvas.height = dim
-  const ctx = canvas.getContext("2d")
-  if (!ctx) return null
-  ctx.fillStyle = "#ffffff"
-  ctx.beginPath()
-  ctx.arc(dim / 2, dim / 2, dim * 0.48, 0, Math.PI * 2)
-  ctx.fill()
-  return createLinearCanvasTexture(canvas)
-}
-
-function createRingTexture(): Texture | null {
-  if (typeof document === "undefined") return null
-  const dim = 128
-  const canvas = document.createElement("canvas")
-  canvas.width = dim
-  canvas.height = dim
-  const ctx = canvas.getContext("2d")
-  if (!ctx) return null
-  ctx.strokeStyle = "#ffffff"
-  ctx.lineWidth = dim * 0.12
-  ctx.beginPath()
-  ctx.arc(dim / 2, dim / 2, dim * 0.41, 0, Math.PI * 2)
-  ctx.stroke()
-  return createLinearCanvasTexture(canvas)
 }
 
 function createCaptionTexture(text: string): Texture | null {
@@ -1305,7 +1378,8 @@ function renderContextMenu(
   ) => Promise<NodeRelationshipSummary>,
   onHideId?: (id: string) => void,
   onHideIds?: (ids: string[]) => void,
-  onInspectRelationship?: (relationshipId: string) => void
+  onInspectRelationship?: (relationshipId: string) => void,
+  sceneActions?: SceneContextMenuItemsProps
 ) {
   const isEdge = "source" in event.data
   if (isEdge) {
@@ -1333,7 +1407,7 @@ function renderContextMenu(
   const isMultiNodeTarget = nodeIds.length > 1
 
   return (
-    <GraphContextMenu onClose={event.onClose}>
+    <GraphContextMenu className="min-w-52" onClose={event.onClose}>
       <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
         {isMultiNodeTarget ? "Selected node actions" : "Node actions"}
       </div>
@@ -1360,12 +1434,30 @@ function renderContextMenu(
         >
           <span className="flex items-center gap-2">
             <EyeOff className="size-3.5 shrink-0" />
-            {isMultiNodeTarget ? `Hide ${nodeIds.length} selected` : "Hide"}
+            <span className="whitespace-nowrap">
+              {isMultiNodeTarget ? `Hide ${nodeIds.length} selected` : "Hide"}
+            </span>
           </span>
           <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
             ⌘ H
           </kbd>
         </button>
+      )}
+      {sceneActions && (
+        <>
+          <div className="my-1 h-px bg-border" />
+          <SceneContextMenuItems
+            {...sceneActions}
+            onClearScene={() => {
+              sceneActions.onClearScene()
+              event.onClose()
+            }}
+            onDismissSingleNodes={() => {
+              sceneActions.onDismissSingleNodes()
+              event.onClose()
+            }}
+          />
+        </>
       )}
     </GraphContextMenu>
   )
@@ -1787,6 +1879,14 @@ function positionHoverCard(
 
 const EMPTY_SELECTIONS: string[] = []
 
+type SceneContextMenuItemsProps = {
+  singleNodeCount: number
+  canDismissSingleNodes: boolean
+  canClearScene: boolean
+  onClearScene: () => void
+  onDismissSingleNodes: () => void
+}
+
 function SceneContextMenu({
   position,
   singleNodeCount,
@@ -1813,8 +1913,28 @@ function SceneContextMenu({
         top: position.y,
       }}
     >
+      <SceneContextMenuItems
+        singleNodeCount={singleNodeCount}
+        canDismissSingleNodes={canDismissSingleNodes}
+        canClearScene={canClearScene}
+        onClearScene={onClearScene}
+        onDismissSingleNodes={onDismissSingleNodes}
+      />
+    </GraphContextMenu>
+  )
+}
+
+function SceneContextMenuItems({
+  singleNodeCount,
+  canDismissSingleNodes,
+  canClearScene,
+  onClearScene,
+  onDismissSingleNodes,
+}: SceneContextMenuItemsProps) {
+  return (
+    <>
       <button
-        className="flex w-full cursor-pointer items-center rounded-sm p-2 text-sm text-popover-foreground hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+        className="flex w-full cursor-pointer items-center rounded-sm p-2 text-sm whitespace-nowrap text-popover-foreground hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
         disabled={!canClearScene}
         type="button"
         onClick={onClearScene}
@@ -1827,7 +1947,7 @@ function SceneContextMenu({
         type="button"
         onClick={onDismissSingleNodes}
       >
-        <span>Dismiss single nodes</span>
+        <span className="whitespace-nowrap">Dismiss single nodes</span>
         {singleNodeCount > 0 && (
           <span className="text-xs text-muted-foreground">
             {singleNodeCount}
@@ -1856,7 +1976,7 @@ function SceneContextMenu({
           ))}
         </div>
       </div>
-    </GraphContextMenu>
+    </>
   )
 }
 

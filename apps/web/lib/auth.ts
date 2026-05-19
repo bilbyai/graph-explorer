@@ -16,7 +16,7 @@ export const auth = betterAuth({
   secret:
     env.BETTER_AUTH_SECRET ??
     "development-only-change-me-graph-explorer-secret",
-  trustedOrigins,
+  trustedOrigins: [...trustedOrigins, "https://web.localhost"],
   baseURL: env.BETTER_AUTH_URL,
   emailAndPassword: {
     enabled: true,

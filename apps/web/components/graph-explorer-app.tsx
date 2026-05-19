@@ -70,6 +70,7 @@ import {
   Sun,
   Trash2,
 } from "lucide-react"
+import { useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
 import * as React from "react"
 import {
@@ -306,6 +307,41 @@ export function GraphExplorerApp({
     setStatus("Canvas cleared")
   }, [])
 
+  const hideIds = React.useCallback((ids: string[]) => {
+    const idSet = new Set(ids)
+    if (idSet.size === 0) return
+
+    setHiddenIds((currentIds) => {
+      const nextIds = new Set(currentIds)
+      for (const id of idSet) {
+        nextIds.add(id)
+      }
+
+      if (nextIds.size === currentIds.length) {
+        return currentIds
+      }
+
+      return Array.from(nextIds)
+    })
+    setSelection((currentSelection) => {
+      if (!currentSelection) return currentSelection
+      return getGraphSelectionIds(currentSelection).some((id) => idSet.has(id))
+        ? null
+        : currentSelection
+    })
+  }, [])
+
+  const hideSelectedNodes = React.useCallback(() => {
+    const selectedNodeIds = getSelectionNodeIds(selection, graph)
+
+    if (selectedNodeIds.length === 0) {
+      return false
+    }
+
+    hideIds(selectedNodeIds)
+    return true
+  }, [graph, hideIds, selection])
+
   const connections = React.useMemo<ConnectionOption[]>(
     () => [...initialConnections, ...localConnections],
     [initialConnections, localConnections]
@@ -356,6 +392,17 @@ export function GraphExplorerApp({
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key === "Backspace" &&
+        event.metaKey &&
+        !isEditableShortcutTarget(event.target)
+      ) {
+        if (!hideSelectedNodes()) return
+
+        event.preventDefault()
+        return
+      }
+
       if (event.key.toLowerCase() !== "s") return
       if (!event.shiftKey || !(event.metaKey || event.ctrlKey)) return
 
@@ -365,7 +412,7 @@ export function GraphExplorerApp({
 
     document.addEventListener("keydown", onKeyDown)
     return () => document.removeEventListener("keydown", onKeyDown)
-  }, [clearScene])
+  }, [clearScene, hideSelectedNodes])
 
   const loadSchema = React.useCallback(
     async (connection: ConnectionOption | null) => {
@@ -987,30 +1034,6 @@ export function GraphExplorerApp({
     )
   }
 
-  function hideIds(ids: string[]) {
-    const idSet = new Set(ids)
-    if (idSet.size === 0) return
-
-    setHiddenIds((currentIds) => {
-      const nextIds = new Set(currentIds)
-      for (const id of idSet) {
-        nextIds.add(id)
-      }
-
-      if (nextIds.size === currentIds.length) {
-        return currentIds
-      }
-
-      return Array.from(nextIds)
-    })
-    setSelection((currentSelection) => {
-      if (!currentSelection) return currentSelection
-      return getGraphSelectionIds(currentSelection).some((id) => idSet.has(id))
-        ? null
-        : currentSelection
-    })
-  }
-
   function hideId(id: string) {
     hideIds([id])
   }
@@ -1196,9 +1219,18 @@ function TopBar({
   onAddConnection: () => void
   onManageConnections: () => void
 }) {
+  const router = useRouter()
   const { resolvedTheme, setTheme } = useTheme()
   const [mounted, setMounted] = React.useState(false)
+  const [isSigningOut, setIsSigningOut] = React.useState(false)
   React.useEffect(() => setMounted(true), [])
+
+  async function signOut() {
+    setIsSigningOut(true)
+    await authClient.signOut()
+    router.replace("/sign-in")
+    router.refresh()
+  }
 
   return (
     <header className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-2 xl:flex xl:h-14 xl:justify-between xl:gap-4 xl:px-4 xl:py-0">
@@ -1323,7 +1355,8 @@ function TopBar({
         {access.mode === "authenticated" ? (
           <Button
             className="inline-flex size-8 items-center justify-center rounded-md border border-border hover:bg-accent"
-            onClick={() => void authClient.signOut()}
+            disabled={isSigningOut}
+            onClick={() => void signOut()}
             type="button"
             title="Sign out"
             variant="outline"
@@ -3363,6 +3396,12 @@ function formatExpansionResultMessage(graph: GraphPayload) {
 
 function getSelectionNodeIds(selection: GraphSelection, graph: GraphPayload) {
   return getNodeIdsFromIds(getGraphSelectionIds(selection), graph)
+}
+
+function isEditableShortcutTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false
+
+  return target.closest("input, textarea, select, [contenteditable]") !== null
 }
 
 function getNodeConnections(node: GraphNodeRecord, graph: GraphPayload) {

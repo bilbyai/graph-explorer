@@ -452,6 +452,17 @@ RETURN n LIMIT $limit`,
     )
   }
 
+  const exactLabelResult = await searchLocalExactLabel(
+    connection,
+    trimmedSearch,
+    limit,
+    exclusions
+  )
+
+  if (exactLabelResult.graph.nodes.length) {
+    return exactLabelResult
+  }
+
   const fullTextResult = await searchLocalFullTextNodeIndexes(
     connection,
     trimmedSearch,
@@ -467,6 +478,27 @@ RETURN n LIMIT $limit`,
   )
 
   return mergeNodeSearchResults(fullTextResult, propertyResult, limit)
+}
+
+async function searchLocalExactLabel(
+  connection: LocalConnection,
+  search: string,
+  limit: number,
+  exclusions?: ExploreGraphExclusions
+) {
+  return runLocalReadQuery(
+    connection,
+    `MATCH (n)
+WHERE any(label IN labels(n) WHERE toLower(label) = $search)
+  AND ${getNodeExclusionPredicates("n").join(" AND ")}
+RETURN n
+LIMIT $limit`,
+    {
+      ...getExploreParams(exclusions),
+      search,
+      limit: neo4j.int(limit),
+    }
+  )
 }
 
 async function searchLocalPropertyValues(

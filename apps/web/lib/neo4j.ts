@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { Effect } from "effect"
 import neo4j, {
   type Driver,
   type Node as Neo4jNode,
@@ -7,6 +8,7 @@ import neo4j, {
 } from "neo4j-driver"
 
 import type { AdminConnection } from "@/lib/connection-registry"
+import { getSafeErrorDetails, QueryFailed } from "@/lib/effect-errors"
 import type {
   ExploreGraphExclusions,
   GraphNodeRecord,
@@ -20,7 +22,7 @@ import type {
 import { resolveNodeCaption } from "@/lib/node-captions"
 import { getDefaultLabelColor as getCategoryColor } from "@/lib/node-styling"
 
-type QueryParams = Record<string, unknown>
+export type QueryParams = Record<string, unknown>
 
 const emptyExploreExclusions: ExploreGraphExclusions = {
   labels: [],
@@ -354,41 +356,80 @@ export async function runReadQuery(
   query: string,
   params: QueryParams = {}
 ): Promise<QueryResultPayload> {
-  const driver = getDriver(connection)
-  const session = driver.session({
-    defaultAccessMode: neo4j.session.READ,
-  })
+  return Effect.runPromise(runReadQueryEffect(connection, query, params))
+}
 
-  try {
-    const result = await session.run(query, params, {
-      timeout: 15_000,
-    })
-    const accumulator = createGraphAccumulator()
-    const rows = result.records.map((record) => {
-      const row: Record<string, unknown> = {}
+export function runReadQueryEffect(
+  connection: AdminConnection,
+  query: string,
+  params: QueryParams = {}
+): Effect.Effect<QueryResultPayload, QueryFailed> {
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const driver = yield* Effect.try({
+        try: () => getDriver(connection),
+        catch: (error) =>
+          new QueryFailed({
+            message:
+              "The read query failed. Check the Cypher, parameters, and selected connection.",
+            causeDetails: getSafeErrorDetails(error),
+          }),
+      })
+      const session = yield* Effect.acquireRelease(
+        Effect.try({
+          try: () =>
+            driver.session({
+              defaultAccessMode: neo4j.session.READ,
+            }),
+          catch: (error) =>
+            new QueryFailed({
+              message:
+                "The read query failed. Check the Cypher, parameters, and selected connection.",
+              causeDetails: getSafeErrorDetails(error),
+            }),
+        }),
+        (session) =>
+          Effect.tryPromise(() => session.close()).pipe(
+            Effect.catchAll(() => Effect.void)
+          )
+      )
+      const result = yield* Effect.tryPromise({
+        try: () =>
+          session.run(query, params, {
+            timeout: 15_000,
+          }),
+        catch: (error) =>
+          new QueryFailed({
+            message:
+              "The read query failed. Check the Cypher, parameters, and selected connection.",
+            causeDetails: getSafeErrorDetails(error),
+          }),
+      })
+      const accumulator = createGraphAccumulator()
+      const rows = result.records.map((record) => {
+        const row: Record<string, unknown> = {}
 
-      for (const key of record.keys) {
-        const value = record.get(key)
-        row[String(key)] = toPlainValue(value)
-        mergeGraphValue(value, accumulator)
+        for (const key of record.keys) {
+          const value = record.get(key)
+          row[String(key)] = toPlainValue(value)
+          mergeGraphValue(value, accumulator)
+        }
+
+        return row
+      })
+
+      return {
+        columns: result.records[0]?.keys.map(String) ?? [],
+        rows,
+        graph: accumulator.graph,
+        summary: {
+          resultAvailableAfter: result.summary.resultAvailableAfter?.toNumber(),
+          resultConsumedAfter: result.summary.resultConsumedAfter?.toNumber(),
+          records: result.records.length,
+        },
       }
-
-      return row
     })
-
-    return {
-      columns: result.records[0]?.keys.map(String) ?? [],
-      rows,
-      graph: accumulator.graph,
-      summary: {
-        resultAvailableAfter: result.summary.resultAvailableAfter?.toNumber(),
-        resultConsumedAfter: result.summary.resultConsumedAfter?.toNumber(),
-        records: result.records.length,
-      },
-    }
-  } finally {
-    await session.close()
-  }
+  )
 }
 
 export async function readSchema(
@@ -447,6 +488,17 @@ RETURN n LIMIT $limit`,
     )
   }
 
+  const exactLabelResult = await searchExactLabel(
+    connection,
+    trimmedSearch,
+    limit,
+    exclusions
+  )
+
+  if (exactLabelResult.graph.nodes.length) {
+    return exactLabelResult
+  }
+
   const fullTextResult = await searchFullTextNodeIndexes(
     connection,
     trimmedSearch,
@@ -467,6 +519,27 @@ RETURN n LIMIT $limit`,
   )
 
   return propertyResult ?? emptyQueryResult()
+}
+
+async function searchExactLabel(
+  connection: AdminConnection,
+  search: string,
+  limit: number,
+  exclusions?: ExploreGraphExclusions
+) {
+  return runReadQuery(
+    connection,
+    `MATCH (n)
+WHERE any(label IN labels(n) WHERE toLower(label) = $search)
+  AND ${getNodeExclusionPredicates("n").join(" AND ")}
+RETURN n
+LIMIT $limit`,
+    {
+      ...getExploreParams(exclusions),
+      search,
+      limit: neo4j.int(limit),
+    }
+  )
 }
 
 async function searchPropertyValues(
