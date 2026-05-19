@@ -37,7 +37,7 @@ import {
   lightTheme,
   type NodeRendererProps,
 } from "reagraph"
-import { CanvasTexture, LinearFilter, type Texture } from "three"
+import { CanvasTexture, LinearFilter, type Texture, Vector3 } from "three"
 
 import { IconCenterBox, IconFitBox } from "@/assets/icons"
 import type {
@@ -701,37 +701,57 @@ export function ReagraphWorkspace({
     // Force-directed layout keeps shifting the new node for a moment; pan
     // once positions have settled, then again to catch any residual drift.
     const firstTimer = window.setTimeout(() => {
-      canvasRef.current?.centerGraph?.(nodeIds, { animated: true })
+      centerGraphWithoutTilt(
+        canvasRef.current,
+        nodeIds,
+        { animated: true },
+        mode === "2d"
+      )
     }, 500)
     const secondTimer = window.setTimeout(() => {
-      canvasRef.current?.centerGraph?.(nodeIds, { animated: true })
+      centerGraphWithoutTilt(
+        canvasRef.current,
+        nodeIds,
+        { animated: true },
+        mode === "2d"
+      )
     }, 1400)
     return () => {
       window.clearTimeout(firstTimer)
       window.clearTimeout(secondTimer)
     }
-  }, [isExpanding])
+  }, [isExpanding, mode])
 
   React.useEffect(() => {
     if (!focusRequest) return
     if (!visibleNodeIds.has(focusRequest.nodeId)) return
 
     const firstTimer = window.setTimeout(() => {
-      canvasRef.current?.centerGraph?.([focusRequest.nodeId], {
-        animated: true,
-      })
+      centerGraphWithoutTilt(
+        canvasRef.current,
+        [focusRequest.nodeId],
+        {
+          animated: true,
+        },
+        mode === "2d"
+      )
     }, 300)
     const secondTimer = window.setTimeout(() => {
-      canvasRef.current?.centerGraph?.([focusRequest.nodeId], {
-        animated: true,
-      })
+      centerGraphWithoutTilt(
+        canvasRef.current,
+        [focusRequest.nodeId],
+        {
+          animated: true,
+        },
+        mode === "2d"
+      )
     }, 1000)
 
     return () => {
       window.clearTimeout(firstTimer)
       window.clearTimeout(secondTimer)
     }
-  }, [focusRequest, visibleNodeIds])
+  }, [focusRequest, visibleNodeIds, mode])
 
   return (
     <div
@@ -891,7 +911,16 @@ export function ReagraphWorkspace({
         </Button>
         <Button
           className="pointer-events-auto inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 hover:bg-accent"
-          onClick={() => canvasRef.current?.centerGraph()}
+          onClick={() =>
+            centerGraphWithoutTilt(
+              canvasRef.current,
+              undefined,
+              {
+                animated: true,
+              },
+              mode === "2d"
+            )
+          }
           type="button"
           variant="outline"
         >
@@ -915,51 +944,135 @@ export function ReagraphWorkspace({
   )
 }
 
+function centerGraphWithoutTilt(
+  canvas: GraphCanvasRef | null,
+  nodeIds?: string[],
+  options?: Parameters<GraphCanvasRef["centerGraph"]>[1],
+  flatten2d = true
+) {
+  canvas?.centerGraph?.(nodeIds, options)
+  if (flatten2d) {
+    restoreOrthographicCameraAxis(canvas, options?.animated ?? true)
+  }
+}
+
+// Reagraph centerGraph targets far-off nodes by rotating the camera toward
+// them. In 2D we want a pan instead, so rebuild the look-at from above.
+function restoreOrthographicCameraAxis(
+  canvas: GraphCanvasRef | null,
+  animated: boolean
+) {
+  const controls = canvas?.getControls?.()
+  if (!controls) return
+
+  const target = controls.getTarget(new Vector3(), true)
+  const position = controls.getPosition(new Vector3(), true)
+  const height = Math.max(Math.abs(position.z - target.z), 1000)
+  void controls
+    .normalizeRotations()
+    .setLookAt(
+      target.x,
+      target.y,
+      target.z + height,
+      target.x,
+      target.y,
+      target.z,
+      animated
+    )
+}
+
 function renderNode(props: NodeRendererProps) {
   return <FlatNode {...props} />
 }
 
 function FlatNode(props: NodeRendererProps) {
-  const { size, color, node, selected, id } = props
+  const { size, color, node, selected, id, opacity = 1 } = props
   const caption = typeof node.label === "string" ? node.label : ""
   const truncated = truncateForCircle(caption, size)
   const showText = size >= 10 && truncated.length > 0
+  const circleTexture = React.useMemo(() => createCircleTexture(), [])
+  const selectionTexture = React.useMemo(
+    () => (selected ? createRingTexture() : null),
+    [selected]
+  )
   const texture = React.useMemo(
     () => (showText ? createCaptionTexture(truncated) : null),
     [truncated, showText]
   )
+  React.useEffect(() => () => circleTexture?.dispose(), [circleTexture])
+  React.useEffect(() => () => selectionTexture?.dispose(), [selectionTexture])
   React.useEffect(() => () => texture?.dispose(), [texture])
 
   return (
     <>
-      {selected && (
-        <mesh position={[0, 0, -0.02]}>
-          <circleGeometry args={[size * 1.22, 48]} />
-          <meshBasicMaterial
+      {selected && selectionTexture && (
+        <sprite position={[0, 0, -0.02]} scale={[size * 2.44, size * 2.44, 1]}>
+          <spriteMaterial
+            map={selectionTexture}
             color={color}
             transparent
             opacity={0.4}
+            depthTest={false}
             depthWrite={false}
           />
-        </mesh>
+        </sprite>
       )}
-      <mesh userData={{ id, type: "node" }}>
-        <circleGeometry args={[size, 48]} />
-        <meshBasicMaterial color={color} depthWrite={false} />
-      </mesh>
+      {circleTexture && (
+        <sprite userData={{ id, type: "node" }} scale={[size * 2, size * 2, 1]}>
+          <spriteMaterial
+            map={circleTexture}
+            color={color}
+            transparent
+            opacity={opacity}
+            depthTest={false}
+            depthWrite={false}
+          />
+        </sprite>
+      )}
       {texture && (
-        <mesh position={[0, 0, 0.05]}>
-          <planeGeometry args={[size * 1.7, size * 1.7]} />
-          <meshBasicMaterial
+        <sprite position={[0, 0, 0.05]} scale={[size * 1.7, size * 1.7, 1]}>
+          <spriteMaterial
             map={texture}
             transparent
             depthWrite={false}
+            depthTest={false}
             toneMapped={false}
           />
-        </mesh>
+        </sprite>
       )}
     </>
   )
+}
+
+function createCircleTexture(): Texture | null {
+  if (typeof document === "undefined") return null
+  const dim = 128
+  const canvas = document.createElement("canvas")
+  canvas.width = dim
+  canvas.height = dim
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return null
+  ctx.fillStyle = "#ffffff"
+  ctx.beginPath()
+  ctx.arc(dim / 2, dim / 2, dim * 0.48, 0, Math.PI * 2)
+  ctx.fill()
+  return createLinearCanvasTexture(canvas)
+}
+
+function createRingTexture(): Texture | null {
+  if (typeof document === "undefined") return null
+  const dim = 128
+  const canvas = document.createElement("canvas")
+  canvas.width = dim
+  canvas.height = dim
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return null
+  ctx.strokeStyle = "#ffffff"
+  ctx.lineWidth = dim * 0.12
+  ctx.beginPath()
+  ctx.arc(dim / 2, dim / 2, dim * 0.41, 0, Math.PI * 2)
+  ctx.stroke()
+  return createLinearCanvasTexture(canvas)
 }
 
 function createCaptionTexture(text: string): Texture | null {
@@ -984,6 +1097,10 @@ function createCaptionTexture(text: string): Texture | null {
     const line = lines[i]
     if (line) ctx.fillText(line, dim / 2, startY + i * lineHeight)
   }
+  return createLinearCanvasTexture(canvas)
+}
+
+function createLinearCanvasTexture(canvas: HTMLCanvasElement): Texture {
   const texture = new CanvasTexture(canvas)
   texture.minFilter = LinearFilter
   texture.magFilter = LinearFilter
