@@ -68,8 +68,6 @@ const GraphCanvas = dynamic(
 const autoLabelNodeThreshold = 250
 const lightRenderNodeThreshold = 750
 const lightRenderRelationshipThreshold = 1500
-const minZoomPercent = 20
-const maxZoomPercent = 8000
 const spinRadiansPerMillisecond = 0.00015
 
 type SpinCameraControls = {
@@ -341,23 +339,6 @@ export function ReagraphWorkspace({
   const [hoveredNode, setHoveredNode] = React.useState<GraphNodeRecord | null>(
     null
   )
-  const [zoomPercent, setZoomPercent] = React.useState(100)
-  const displayedZoomPercent = useLerpedInteger(zoomPercent)
-  const [isEditingZoom, setIsEditingZoom] = React.useState(false)
-  const [zoomInputValue, setZoomInputValue] = React.useState("100")
-  const zoomInputRef = React.useRef<HTMLInputElement>(null)
-  const shouldApplyZoomInputOnBlurRef = React.useRef(true)
-  const graphCanvasControlsKey = `${canvasKey ?? "default"}-${mode}`
-
-  const syncZoomPercent = React.useCallback(() => {
-    const nextZoomPercent = getCanvasZoomPercent(canvasRef.current)
-    if (nextZoomPercent === null) return
-    setZoomPercent((currentZoomPercent) =>
-      currentZoomPercent === nextZoomPercent
-        ? currentZoomPercent
-        : nextZoomPercent
-    )
-  }, [])
 
   const getSelectionFromVisibleIds = React.useCallback(
     (ids: string[]): GraphSelection => {
@@ -425,63 +406,6 @@ export function ReagraphWorkspace({
       pointerRef.current
     )
   }, [hoveredNode])
-
-  React.useEffect(() => {
-    if (!isEditingZoom) return
-    zoomInputRef.current?.focus()
-    zoomInputRef.current?.select()
-  }, [isEditingZoom])
-
-  React.useEffect(() => {
-    if (!graphCanvasControlsKey) return
-
-    let cancelled = false
-    let attempts = 0
-    let retryTimer: number | null = null
-    let cleanup: (() => void) | null = null
-
-    const attach = () => {
-      if (cancelled) return
-
-      const controls = canvasRef.current?.getControls?.()
-      if (!controls) {
-        if (attempts < 60) {
-          attempts += 1
-          retryTimer = window.setTimeout(attach, 50)
-        }
-        return
-      }
-
-      const syncFromControls = () => {
-        const nextZoomPercent = getControlsZoomPercent(controls)
-        if (nextZoomPercent === null) return
-        setZoomPercent((currentZoomPercent) =>
-          currentZoomPercent === nextZoomPercent
-            ? currentZoomPercent
-            : nextZoomPercent
-        )
-      }
-
-      controls.addEventListener("update", syncFromControls)
-      controls.addEventListener("rest", syncFromControls)
-      syncFromControls()
-
-      cleanup = () => {
-        controls.removeEventListener("update", syncFromControls)
-        controls.removeEventListener("rest", syncFromControls)
-      }
-    }
-
-    attach()
-
-    return () => {
-      cancelled = true
-      if (retryTimer !== null) {
-        window.clearTimeout(retryTimer)
-      }
-      cleanup?.()
-    }
-  }, [graphCanvasControlsKey])
 
   // Reagraph defaults the wheel action to DOLLY/ZOOM. Override to TRUCK so
   // two-finger trackpad scroll pans via deltaX/deltaY. macOS pinch arrives
@@ -729,63 +653,11 @@ export function ReagraphWorkspace({
 
   const handleZoomIn = React.useCallback(() => {
     canvasRef.current?.zoomIn()
-    window.requestAnimationFrame(syncZoomPercent)
-  }, [syncZoomPercent])
+  }, [])
 
   const handleZoomOut = React.useCallback(() => {
     canvasRef.current?.zoomOut()
-    window.requestAnimationFrame(syncZoomPercent)
-  }, [syncZoomPercent])
-
-  const startZoomEdit = React.useCallback(() => {
-    shouldApplyZoomInputOnBlurRef.current = true
-    setZoomInputValue(String(zoomPercent))
-    setIsEditingZoom(true)
-  }, [zoomPercent])
-
-  const cancelZoomEdit = React.useCallback(() => {
-    shouldApplyZoomInputOnBlurRef.current = false
-    setZoomInputValue(String(zoomPercent))
-    setIsEditingZoom(false)
-  }, [zoomPercent])
-
-  const applyZoomInput = React.useCallback(() => {
-    const parsedZoomPercent = Number.parseFloat(zoomInputValue)
-    if (!Number.isFinite(parsedZoomPercent)) {
-      cancelZoomEdit()
-      return
-    }
-
-    const nextZoomPercent = clampZoomPercent(Math.round(parsedZoomPercent))
-    setZoomPercent(nextZoomPercent)
-    setZoomInputValue(String(nextZoomPercent))
-    setIsEditingZoom(false)
-    void canvasRef.current?.getControls?.()?.zoomTo(nextZoomPercent / 100, true)
-  }, [cancelZoomEdit, zoomInputValue])
-
-  const handleZoomInputBlur = React.useCallback(() => {
-    if (!shouldApplyZoomInputOnBlurRef.current) {
-      shouldApplyZoomInputOnBlurRef.current = true
-      return
-    }
-    applyZoomInput()
-  }, [applyZoomInput])
-
-  const handleZoomInputKeyDown = React.useCallback(
-    (event: React.KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === "Enter") {
-        event.preventDefault()
-        applyZoomInput()
-        return
-      }
-
-      if (event.key === "Escape") {
-        event.preventDefault()
-        cancelZoomEdit()
-      }
-    },
-    [applyZoomInput, cancelZoomEdit]
-  )
+  }, [])
 
   const toggleSelectionId = React.useCallback(
     (id: string) => {
@@ -1103,179 +975,87 @@ export function ReagraphWorkspace({
           </Tooltip>
         </div>
       </TooltipProvider>
-      <TooltipProvider delayDuration={150}>
-        <fieldset
-          className="pointer-events-auto absolute bottom-4 left-4 z-10 grid h-10 grid-cols-[2.25rem_minmax(3.75rem,4.5rem)_2.25rem] items-center overflow-hidden rounded-full border border-border bg-background/90 p-0 text-foreground shadow-xl backdrop-blur"
-          data-graph-menu
-        >
-          <legend className="sr-only">Canvas zoom</legend>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label="Zoom out"
-                className="h-full w-full rounded-none border-0 bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground"
-                onClick={handleZoomOut}
-                size="icon"
-                type="button"
-                variant="ghost"
-              >
-                <Minus className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top">Zoom out</TooltipContent>
-          </Tooltip>
-          {isEditingZoom ? (
-            <div className="flex h-full items-center justify-center border-x border-border/70 px-2">
-              <input
-                aria-label="Zoom percentage"
-                className="h-full w-full min-w-0 bg-transparent text-center text-sm font-medium tabular-nums outline-none"
-                inputMode="decimal"
-                onBlur={handleZoomInputBlur}
-                onChange={(event) => setZoomInputValue(event.target.value)}
-                onKeyDown={handleZoomInputKeyDown}
-                ref={zoomInputRef}
-                type="text"
-                value={zoomInputValue}
-              />
-              <span className="pointer-events-none text-sm font-medium tabular-nums">
-                %
-              </span>
+      <div className="pointer-events-none absolute right-4 bottom-4 z-10 flex flex-col items-end gap-2">
+        <div className="pointer-events-none flex flex-col gap-2 rounded-md border border-border bg-muted/90 p-2 text-xs text-muted-foreground shadow-xl">
+          <TooltipProvider delayDuration={150}>
+            <div className="pointer-events-auto grid w-full grid-cols-2 gap-2">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    aria-label="Zoom out"
+                    className="h-7 w-full rounded border border-border px-2 py-1 hover:bg-accent"
+                    onClick={handleZoomOut}
+                    type="button"
+                    variant="outline"
+                  >
+                    <Minus className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">Zoom out</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    aria-label="Zoom in"
+                    className="h-7 w-full rounded border border-border px-2 py-1 hover:bg-accent"
+                    onClick={handleZoomIn}
+                    type="button"
+                    variant="outline"
+                  >
+                    <Plus className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">Zoom in</TooltipContent>
+              </Tooltip>
             </div>
-          ) : (
-            <button
-              aria-label="Edit zoom percentage"
-              className="flex h-full w-full items-center justify-center border-x border-border/70 bg-transparent px-2 text-sm font-medium tabular-nums outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/30"
-              onDoubleClick={startZoomEdit}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault()
-                  startZoomEdit()
-                }
-              }}
-              type="button"
-            >
-              {displayedZoomPercent}%
-            </button>
-          )}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label="Zoom in"
-                className="h-full w-full rounded-none border-0 bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground"
-                onClick={handleZoomIn}
-                size="icon"
-                type="button"
-                variant="ghost"
-              >
-                <Plus className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top">Zoom in</TooltipContent>
-          </Tooltip>
-        </fieldset>
-      </TooltipProvider>
-      <div className="pointer-events-none absolute right-4 bottom-4 flex flex-col gap-2 rounded-md border border-border bg-muted/90 p-2 text-xs text-muted-foreground shadow-xl">
-        <Button
-          className="pointer-events-auto inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 hover:bg-accent"
-          onClick={() => canvasRef.current?.fitNodesInView()}
-          type="button"
-          variant="outline"
-        >
-          <IconFitBox className="size-3.5" />
-          Fit
-        </Button>
-        <Button
-          className="pointer-events-auto inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 hover:bg-accent"
-          onClick={() =>
-            centerGraphWithoutTilt(
-              canvasRef.current,
-              undefined,
-              {
-                animated: true,
-              },
-              mode === "2d"
-            )
-          }
-          type="button"
-          variant="outline"
-        >
-          <IconCenterBox className="size-3.5" />
-          Center
-        </Button>
-        {mode === "3d" && (
+          </TooltipProvider>
           <Button
-            aria-pressed={spinEnabled}
             className="pointer-events-auto inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 hover:bg-accent"
-            onClick={() => setSpinEnabled((enabled) => !enabled)}
+            onClick={() => canvasRef.current?.fitNodesInView()}
             type="button"
-            variant={spinEnabled ? "default" : "outline"}
+            variant="outline"
           >
-            <Orbit className="size-3.5" />
-            Spin
+            <IconFitBox className="size-3.5" />
+            Fit
           </Button>
-        )}
+          <Button
+            className="pointer-events-auto inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 hover:bg-accent"
+            onClick={() =>
+              centerGraphWithoutTilt(
+                canvasRef.current,
+                undefined,
+                {
+                  animated: true,
+                },
+                mode === "2d"
+              )
+            }
+            type="button"
+            variant="outline"
+          >
+            <IconCenterBox className="size-3.5" />
+            Center
+          </Button>
+          {mode === "3d" && (
+            <Button
+              aria-pressed={spinEnabled}
+              className={`pointer-events-auto inline-flex items-center gap-1.5 rounded border px-2 py-1 ${
+                spinEnabled
+                  ? "border-primary hover:bg-primary/80"
+                  : "border-border hover:bg-accent"
+              }`}
+              onClick={() => setSpinEnabled((enabled) => !enabled)}
+              type="button"
+              variant={spinEnabled ? "default" : "outline"}
+            >
+              <Orbit className="size-3.5" />
+              Spin
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   )
-}
-
-function getCanvasZoomPercent(canvas: GraphCanvasRef | null) {
-  return getControlsZoomPercent(canvas?.getControls?.())
-}
-
-function getControlsZoomPercent(
-  controls: ReturnType<GraphCanvasRef["getControls"]> | null | undefined
-) {
-  const zoom = controls?.camera?.zoom
-  if (typeof zoom !== "number" || !Number.isFinite(zoom) || zoom <= 0) {
-    return null
-  }
-  return Math.round(zoom * 100)
-}
-
-function clampZoomPercent(zoomPercent: number) {
-  return Math.max(minZoomPercent, Math.min(maxZoomPercent, zoomPercent))
-}
-
-function useLerpedInteger(targetValue: number) {
-  const [value, setValue] = React.useState(targetValue)
-  const valueRef = React.useRef(targetValue)
-
-  React.useEffect(() => {
-    let frameId: number | null = null
-
-    const tick = () => {
-      const currentValue = valueRef.current
-      const delta = targetValue - currentValue
-
-      if (Math.abs(delta) < 1) {
-        valueRef.current = targetValue
-        setValue(targetValue)
-        return
-      }
-
-      const easedValue = currentValue + delta * 0.22
-      const roundedValue = Math.round(easedValue)
-      const nextValue =
-        roundedValue === currentValue
-          ? currentValue + Math.sign(delta)
-          : roundedValue
-
-      valueRef.current = nextValue
-      setValue(nextValue)
-      frameId = window.requestAnimationFrame(tick)
-    }
-
-    frameId = window.requestAnimationFrame(tick)
-
-    return () => {
-      if (frameId !== null) {
-        window.cancelAnimationFrame(frameId)
-      }
-    }
-  }, [targetValue])
-
-  return value
 }
 
 function centerGraphWithoutTilt(
