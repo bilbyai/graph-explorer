@@ -1022,7 +1022,11 @@ export function ReagraphWorkspace({
           {mode === "3d" && (
             <Button
               aria-pressed={spinEnabled}
-              className="pointer-events-auto inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 hover:bg-accent"
+              className={`pointer-events-auto inline-flex items-center gap-1.5 rounded border px-2 py-1 ${
+                spinEnabled
+                  ? "border-primary hover:bg-primary/80"
+                  : "border-border hover:bg-accent"
+              }`}
               onClick={() => setSpinEnabled((enabled) => !enabled)}
               type="button"
               variant={spinEnabled ? "default" : "outline"}
