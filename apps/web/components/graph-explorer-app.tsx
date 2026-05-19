@@ -2495,22 +2495,27 @@ function Metric({
 }
 
 function mergeGraphs(currentGraph: GraphPayload, nextGraph: GraphPayload) {
+  const nodeIds = new Set(currentGraph.nodes.map((node) => node.id))
+  const relationshipIds = new Set(
+    currentGraph.relationships.map((relationship) => relationship.id)
+  )
+
   return {
     nodes: [
       ...currentGraph.nodes,
-      ...nextGraph.nodes.filter(
-        (node) =>
-          !currentGraph.nodes.some((currentNode) => currentNode.id === node.id)
-      ),
+      ...nextGraph.nodes.filter((node) => {
+        if (nodeIds.has(node.id)) return false
+        nodeIds.add(node.id)
+        return true
+      }),
     ],
     relationships: [
       ...currentGraph.relationships,
-      ...nextGraph.relationships.filter(
-        (relationship) =>
-          !currentGraph.relationships.some(
-            (currentRelationship) => currentRelationship.id === relationship.id
-          )
-      ),
+      ...nextGraph.relationships.filter((relationship) => {
+        if (relationshipIds.has(relationship.id)) return false
+        relationshipIds.add(relationship.id)
+        return true
+      }),
     ],
   }
 }

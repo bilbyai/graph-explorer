@@ -245,6 +245,11 @@ export function ReagraphWorkspace({
   const hoverCardRef = React.useRef<HTMLDivElement>(null)
   const pointerRef = React.useRef({ x: 0, y: 0 })
   const hoveredNodeRef = React.useRef<GraphNodeRecord | null>(null)
+  const relationshipSummaryCacheRef = React.useRef(
+    new Map<string, Promise<NodeRelationshipSummary>>()
+  )
+  const relationshipSummaryFetcherRef = React.useRef(onFetchRelationshipSummary)
+  const relationshipSummaryGraphRef = React.useRef(graph)
   const [hoveredNode, setHoveredNode] = React.useState<GraphNodeRecord | null>(
     null
   )
@@ -284,6 +289,16 @@ export function ReagraphWorkspace({
   React.useEffect(() => {
     hoveredNodeRef.current = hoveredNode
   }, [hoveredNode])
+
+  React.useEffect(() => {
+    relationshipSummaryFetcherRef.current = onFetchRelationshipSummary
+  }, [onFetchRelationshipSummary])
+
+  React.useEffect(() => {
+    if (relationshipSummaryGraphRef.current === graph) return
+    relationshipSummaryGraphRef.current = graph
+    relationshipSummaryCacheRef.current.clear()
+  })
 
   React.useEffect(() => {
     const wrapper = wrapperRef.current
@@ -504,6 +519,23 @@ export function ReagraphWorkspace({
     [onExpandNodes]
   )
 
+  const fetchCachedRelationshipSummary = React.useCallback((nodeId: string) => {
+    const fetchSummary = relationshipSummaryFetcherRef.current
+    if (!fetchSummary) {
+      return Promise.reject(new Error("Relationship summary unavailable"))
+    }
+
+    const cached = relationshipSummaryCacheRef.current.get(nodeId)
+    if (cached) return cached
+
+    const request = fetchSummary(nodeId).catch((error) => {
+      relationshipSummaryCacheRef.current.delete(nodeId)
+      throw error
+    })
+    relationshipSummaryCacheRef.current.set(nodeId, request)
+    return request
+  }, [])
+
   const handleContextMenu = React.useCallback(
     (event: ContextMenuEvent) => {
       const targetNodeIds = getContextMenuTargetNodeIds(
@@ -516,13 +548,14 @@ export function ReagraphWorkspace({
         event,
         targetNodeIds,
         handleExpandNodes,
-        onFetchRelationshipSummary,
+        onFetchRelationshipSummary ? fetchCachedRelationshipSummary : undefined,
         onHideId,
         onHideIds,
         handleInspectRelationship
       )
     },
     [
+      fetchCachedRelationshipSummary,
       handleExpandNodes,
       handleInspectRelationship,
       onFetchRelationshipSummary,
@@ -1165,10 +1198,7 @@ function ExpandMenuItem({
     }, 120)
   }, [cancelClose])
 
-  const openSubmenu = React.useCallback(() => {
-    cancelClose()
-    setIsSubmenuOpen(true)
-
+  const startFetch = React.useCallback(() => {
     if (hasFetchedRef.current || !onFetchRelationshipSummary || isLoading) {
       return
     }
@@ -1187,7 +1217,19 @@ function ExpandMenuItem({
       .finally(() => {
         setIsLoading(false)
       })
-  }, [cancelClose, isLoading, nodeIds, onFetchRelationshipSummary])
+  }, [isLoading, nodeIds, onFetchRelationshipSummary])
+
+  const openSubmenu = React.useCallback(() => {
+    cancelClose()
+    setIsSubmenuOpen(true)
+    startFetch()
+  }, [cancelClose, startFetch])
+
+  React.useEffect(() => {
+    if (onFetchRelationshipSummary) {
+      startFetch()
+    }
+  }, [onFetchRelationshipSummary, startFetch])
 
   React.useEffect(() => () => cancelClose(), [cancelClose])
 

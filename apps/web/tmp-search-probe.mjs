@@ -121,7 +121,11 @@ try {
   const indexNames = indexesResult.records[0]?.get(0) ?? []
   console.log("fulltext indexes", indexNames.length)
   for (const indexName of indexNames) {
-    for (const query of ["xi jin ping", "xi* AND jin*", "xi* OR jin* OR ping*"]) {
+    for (const query of [
+      "xi jin ping",
+      "xi* AND jin*",
+      "xi* OR jin* OR ping*",
+    ]) {
       await run(
         `fulltext index ${indexName} ${query}`,
         "CALL db.index.fulltext.queryNodes($indexName, $query) YIELD node WITH DISTINCT node RETURN count(node)",

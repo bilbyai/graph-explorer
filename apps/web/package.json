@@ -1,10 +1,10 @@
 {
-  "name": "web",
+  "name": "@graph-explorer/web",
   "version": "0.0.1",
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "NODE_OPTIONS=--no-deprecation pnpm with-env next dev --turbopack",
+    "dev": "NODE_OPTIONS=--no-deprecation pnpm with-env portless run next dev --turbopack",
     "devsafe": "rm -rf .next && NODE_OPTIONS=--no-deprecation pnpm with-env next dev --turbopack",
     "build": "NODE_OPTIONS=\"--no-deprecation --max-old-space-size=8000\" pnpm with-env next build",
     "start": "NODE_OPTIONS=--no-deprecation pnpm with-env next start",
@@ -27,6 +27,7 @@
     "next": "16.1.6",
     "next-themes": "^0.4.6",
     "pg": "^8.20.0",
+    "portless": "^0.13.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "reagraph": "^4.30.8",

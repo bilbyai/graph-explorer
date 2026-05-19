@@ -1,9 +1,11 @@
 {
   "name": "graph-explorer",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "scripts": {
     "build": "turbo build",
+    "connections:base64": "node scripts/connections-to-base64.mjs",
+    "connections:env": "node scripts/connections-to-env.mjs",
     "dev": "turbo dev",
     "check": "biome check .",
     "check:fix": "biome check --write .",
