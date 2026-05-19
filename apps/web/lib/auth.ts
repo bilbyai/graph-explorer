@@ -15,7 +15,7 @@ export const auth = betterAuth({
     env.BETTER_AUTH_SECRET ??
     "development-only-change-me-graph-explorer-secret",
   trustedOrigins: [
-    env.BETTER_AUTH_URL,
+    env.BETTER_AUTH_URL ?? "",
     "https://graph-explorer-alpha.vercel.app",
     "http://localhost:3000",
     "https://web.localhost",

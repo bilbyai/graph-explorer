@@ -722,8 +722,9 @@ export function GraphExplorerApp({
             return
           }
 
+          const newGraph = getNewGraphItems(graph, expandedGraph)
           setGraph((currentGraph) => mergeGraphs(currentGraph, expandedGraph))
-          toast.success(formatExpansionResultMessage(expandedGraph))
+          toast.success(formatExpansionResultMessage(newGraph))
           setStatus(`Local ${expansionLabel} expanded from ${targetLabel}`)
         } catch {
           toast.error(noExpansionResultsMessage)
@@ -766,8 +767,9 @@ export function GraphExplorerApp({
           return
         }
 
+        const newGraph = getNewGraphItems(graph, expandedGraph)
         setGraph((currentGraph) => mergeGraphs(currentGraph, expandedGraph))
-        toast.success(formatExpansionResultMessage(expandedGraph))
+        toast.success(formatExpansionResultMessage(newGraph))
         const capitalLabel =
           expansionLabel.charAt(0).toUpperCase() + expansionLabel.slice(1)
         setStatus(`${capitalLabel} expanded from ${targetLabel}`)
@@ -3103,6 +3105,20 @@ function mergeGraphs(currentGraph: GraphPayload, nextGraph: GraphPayload) {
         return true
       }),
     ],
+  }
+}
+
+function getNewGraphItems(currentGraph: GraphPayload, nextGraph: GraphPayload) {
+  const nodeIds = new Set(currentGraph.nodes.map((node) => node.id))
+  const relationshipIds = new Set(
+    currentGraph.relationships.map((relationship) => relationship.id)
+  )
+
+  return {
+    nodes: nextGraph.nodes.filter((node) => !nodeIds.has(node.id)),
+    relationships: nextGraph.relationships.filter(
+      (relationship) => !relationshipIds.has(relationship.id)
+    ),
   }
 }
 
