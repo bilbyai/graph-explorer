@@ -50,6 +50,12 @@ function isRetryableNetworkError(error: unknown) {
   return retryableNetworkErrorCodes.has(getErrorCode(error) ?? "")
 }
 
+function isRetryableResendError(error: { name: string }) {
+  return (
+    error.name === "application_error" || error.name === "rate_limit_exceeded"
+  )
+}
+
 function wait(delayMs: number) {
   return new Promise((resolve) => setTimeout(resolve, delayMs))
 }
@@ -85,7 +91,15 @@ export async function sendPasswordResetEmail({
       const { error } = await resend.emails.send(email, { idempotencyKey })
 
       if (error) {
+        const retryDelayMs = retryDelaysMs[attempt]
+
+        if (retryDelayMs !== undefined && isRetryableResendError(error)) {
+          await wait(retryDelayMs)
+          continue
+        }
+
         console.error("Unable to send password reset email", {
+          attempts: attempt + 1,
           message: error.message,
           name: error.name,
         })

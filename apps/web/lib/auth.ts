@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
 import { nextCookies } from "better-auth/next-js"
+import { after } from "next/server"
 
 import { db } from "@/lib/db"
 import * as schema from "@/lib/db/schema"
@@ -19,14 +20,17 @@ export const auth = betterAuth({
     "development-only-change-me-graph-explorer-secret",
   trustedOrigins: [...trustedOrigins, "https://web.localhost"],
   baseURL: env.BETTER_AUTH_URL,
+  advanced: {
+    backgroundTasks: {
+      handler: after,
+    },
+  },
   emailAndPassword: {
     enabled: true,
     resetPasswordTokenExpiresIn: 60 * 60,
     revokeSessionsOnPasswordReset: true,
-    sendResetPassword: async ({ user, url }) => {
-      // Better Auth runs this asynchronously to keep account lookups timing-safe.
-      void sendPasswordResetEmail({ to: user.email, url })
-    },
+    sendResetPassword: ({ user, url }) =>
+      sendPasswordResetEmail({ to: user.email, url }),
   },
   plugins: [nextCookies()],
 })
