@@ -59,11 +59,6 @@ export const env = createEnv({
     BETTER_AUTH_URL: z.string().url().optional(),
     DATABASE_URL: z.string().optional(),
     RESEND_API_KEY: z.string().min(1).optional(),
-    RESEND_FROM_EMAIL: z
-      .string()
-      .min(1)
-      .optional()
-      .default("Graph Explorer <onboarding@resend.dev>"),
   },
   runtimeEnv: process.env,
   emptyStringAsUndefined: true,

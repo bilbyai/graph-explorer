@@ -36,7 +36,7 @@ export async function sendPasswordResetEmail({
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: env.RESEND_FROM_EMAIL,
+        from: "noreply@bilby.ai",
         to: [to],
         subject: "Reset your Graph Explorer password",
         html: `<p>We received a request to reset your Graph Explorer password.</p><p><a href="${escapeHtml(url)}">Reset your password</a></p><p>This link expires in one hour. If you did not request a password reset, you can safely ignore this email.</p>`,
@@ -46,7 +46,13 @@ export async function sendPasswordResetEmail({
     })
 
     if (!response.ok) {
+      const body = await response.json().catch(() => null)
+
       console.error("Unable to send password reset email", {
+        message:
+          typeof body === "object" && body && "message" in body
+            ? body.message
+            : undefined,
         status: response.status,
       })
     }
